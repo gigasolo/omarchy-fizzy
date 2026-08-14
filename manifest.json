@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Lon Baker",
   "license": "MIT",
-  "homepage": "https://github.com/vpbxlgb/omarchy-fizzy",
+  "homepage": "https://github.com/gigasolo/omarchy-fizzy",
   "description": "Unread Fizzy.do notifications in the Omarchy bar.",
   "kinds": [
     "bar-widget"

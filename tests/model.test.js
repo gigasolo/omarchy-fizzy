@@ -15,13 +15,13 @@ function eventNotification(overrides = {}) {
     body: "Added by Jay Beck",
     unread_count: 1,
     created_at: "2026-08-12T19:09:07.279Z",
-    url: "https://app.fizzy.do/6101773/notifications/03go4kzxi8b1gcmtumlig3yrc",
+    url: "https://app.fizzy.do/acct/notifications/n1",
     creator: { name: "Jay Beck" },
     card: {
       number: 510,
       title: "Colorful Nails",
-      url: "https://app.fizzy.do/6101773/cards/510",
-      board_name: "VirtualText Orders"
+      url: "https://app.fizzy.do/acct/cards/510",
+      board_name: "Orders"
     }
   }, overrides)
 }
@@ -35,12 +35,12 @@ function mentionNotification(overrides = {}) {
     body: "We are not running Kamailio 5.5 or higher at this time.",
     unread_count: 1,
     created_at: "2026-08-11T16:00:00.000Z",
-    url: "https://app.fizzy.do/6101773/notifications/03gmvechkr7kr9p0rp39hqtxz",
+    url: "https://app.fizzy.do/acct/notifications/n2",
     creator: { name: "Josh Ferreira" },
     card: {
       number: 493,
       title: "Own AI Voice Widget: Telnyx assessment + Kazoo/SIP Attach architecture",
-      url: "https://app.fizzy.do/6101773/cards/493",
+      url: "https://app.fizzy.do/acct/cards/493",
       board_name: "Development"
     }
   }, overrides)
@@ -49,22 +49,22 @@ function mentionNotification(overrides = {}) {
 test("parseIdentity extracts the current account and user", () => {
   const result = Model.parseIdentity(envelope({
     accounts: [{
-      id: "03f57o0komzjxizcioldj38aa",
-      name: "VirtualPBX",
-      slug: "/6101773",
-      user: { id: "03f57o0krj41pxd9zorhtsmiu", name: "Lon Baker" }
+      id: "acct-1",
+      name: "Acme",
+      slug: "/acme",
+      user: { id: "user-1", name: "Ada Lovelace" }
     }]
   }))
 
   assert.equal(result.ok, true)
   assert.deepEqual(result.account, {
-    id: "03f57o0komzjxizcioldj38aa",
-    name: "VirtualPBX",
-    slug: "/6101773"
+    id: "acct-1",
+    name: "Acme",
+    slug: "/acme"
   })
   assert.deepEqual(result.user, {
-    id: "03f57o0krj41pxd9zorhtsmiu",
-    name: "Lon Baker"
+    id: "user-1",
+    name: "Ada Lovelace"
   })
 })
 
@@ -97,8 +97,8 @@ test("parseNotifications normalizes event and mention fields", () => {
   const event = result.items.find(item => item.sourceType === "event")
   assert.equal(event.title, "Colorful Nails")
   assert.equal(event.excerpt, "Added by Jay Beck")
-  assert.equal(event.boardName, "VirtualText Orders")
-  assert.equal(event.cardUrl, "https://app.fizzy.do/6101773/cards/510")
+  assert.equal(event.boardName, "Orders")
+  assert.equal(event.cardUrl, "https://app.fizzy.do/acct/cards/510")
   assert.equal(event.cardNumber, 510)
   assert.equal(event.creator, "Jay Beck")
   assert.equal(event.unread, true)
@@ -118,8 +118,8 @@ test("parseNotifications skips items without ids and strips markup", () => {
       card: {
         number: 510,
         title: "Colorful &amp; Bright Nails",
-        url: "https://app.fizzy.do/6101773/cards/510",
-        board_name: "VirtualText Orders"
+        url: "https://app.fizzy.do/acct/cards/510",
+        board_name: "Orders"
       }
     })
   ]), 40)
@@ -147,9 +147,9 @@ test("filterNotifications splits unread and previous without reordering", () => 
     { id: "also-new", unread: true }
   ]
 
-  assert.deepEqual(Model.filterNotifications(items, "unread").map(item => item.id), ["new", "also-new"])
-  assert.deepEqual(Model.filterNotifications(items, "previous").map(item => item.id), ["old"])
-  assert.deepEqual(Model.filterNotifications(items, "all").map(item => item.id), ["new", "old", "also-new"])
+  assert.deepEqual(Model.filterNotifications(items, "", "unread").map(item => item.id), ["new", "also-new"])
+  assert.deepEqual(Model.filterNotifications(items, "", "previous").map(item => item.id), ["old"])
+  assert.deepEqual(Model.filterNotifications(items, "", "all").map(item => item.id), ["new", "old", "also-new"])
 })
 
 test("unreadCount counts unread items", () => {
@@ -162,24 +162,24 @@ test("unreadCount counts unread items", () => {
 
 test("openUrl prefers the card URL", () => {
   assert.equal(Model.openUrl({
-    cardUrl: "https://app.fizzy.do/6101773/cards/510",
-    url: "https://app.fizzy.do/6101773/notifications/abc"
-  }), "https://app.fizzy.do/6101773/cards/510")
+    cardUrl: "https://app.fizzy.do/acct/cards/510",
+    url: "https://app.fizzy.do/acct/notifications/abc"
+  }), "https://app.fizzy.do/acct/cards/510")
 
   assert.equal(Model.openUrl({
     cardUrl: "",
-    url: "https://app.fizzy.do/6101773/notifications/abc"
-  }), "https://app.fizzy.do/6101773/notifications/abc")
+    url: "https://app.fizzy.do/acct/notifications/abc"
+  }), "https://app.fizzy.do/acct/notifications/abc")
 })
 
 test("notificationMeta includes time, creator, and board", () => {
   const item = {
     timestampMs: Date.parse("2026-08-12T19:09:07.279Z"),
     creator: "Jay Beck",
-    boardName: "VirtualText Orders"
+    boardName: "Orders"
   }
   const nowMs = Date.parse("2026-08-14T12:00:00.000Z")
-  assert.equal(Model.notificationMeta(item, nowMs), "Aug 12 • Jay Beck • VirtualText Orders")
+  assert.equal(Model.notificationMeta(item, nowMs), "Aug 12 • Jay Beck • Orders")
 })
 
 test("parseThemeColors reads named six-digit colors", () => {
@@ -195,6 +195,72 @@ test("notificationTypeIcon maps known Fizzy source types", () => {
   assert.notEqual(Model.notificationTypeIcon("mention"), Model.notificationTypeIcon("event"))
   assert.ok(Model.notificationTypeIcon("mention"))
   assert.ok(Model.notificationTypeIcon("unknown"))
+})
+
+test("parseProfiles keeps token-bearing profiles and skips the rest", () => {
+  const result = Model.parseProfiles(envelope([
+    { profile: "work", account: "acme", has_token: true, active: true, base_url: "https://app.fizzy.do" },
+    { profile: "empty", account: "idle", has_token: false, active: false },
+    { profile: "", has_token: true }
+  ]))
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.profiles, [
+    { profile: "work", account: "acme", active: true, baseUrl: "https://app.fizzy.do" }
+  ])
+})
+
+test("parseNotifications stamps the profile context onto each item", () => {
+  const result = Model.parseNotifications(envelope([eventNotification()]), 40, {
+    profile: "work",
+    accountName: "Acme"
+  })
+
+  assert.equal(result.items[0].profile, "work")
+  assert.equal(result.items[0].accountName, "Acme")
+})
+
+test("filterNotifications combines profile and read-state filters", () => {
+  const items = [
+    { id: "work-new", profile: "work", unread: true },
+    { id: "home-new", profile: "home", unread: true },
+    { id: "work-old", profile: "work", unread: false }
+  ]
+
+  assert.deepEqual(Model.filterNotifications(items, "work", "unread").map(item => item.id), ["work-new"])
+  assert.deepEqual(Model.filterNotifications(items, "work", "previous").map(item => item.id), ["work-old"])
+  assert.deepEqual(Model.filterNotifications(items, "", "unread").map(item => item.id), ["work-new", "home-new"])
+})
+
+test("accountFilterOptions lists all profiles after an All accounts row", () => {
+  assert.deepEqual(Model.accountFilterOptions([
+    { profile: "home", accountName: "Home" },
+    { profile: "work", accountName: "Acme" }
+  ]), [
+    { value: "", label: "All accounts" },
+    { value: "work", label: "Acme" },
+    { value: "home", label: "Home" }
+  ])
+})
+
+test("notificationMeta includes the account only when asked", () => {
+  const item = {
+    timestampMs: 0,
+    creator: "Ada",
+    boardName: "Orders",
+    accountName: "Acme"
+  }
+  assert.equal(Model.notificationMeta(item, 0, false), "Ada • Orders")
+  assert.equal(Model.notificationMeta(item, 0, true), "Ada • Orders (Acme)")
+})
+
+test("fizzyArgs prefixes --profile when a profile is set", () => {
+  assert.deepEqual(Model.fizzyArgs("work", ["notification", "list", "--json"]), [
+    "fizzy", "--profile", "work", "notification", "list", "--json"
+  ])
+  assert.deepEqual(Model.fizzyArgs("", ["identity", "show", "--json"]), [
+    "fizzy", "identity", "show", "--json"
+  ])
 })
 
 test("invalid CLI output returns a useful parse failure", () => {

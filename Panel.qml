@@ -17,13 +17,37 @@ Panel {
   property bool cursorActive: false
   property double nowMs: Date.now()
   property string stateFilter: "unread"
+  property string accountFilter: ""
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, stateFilter)
+  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, accountFilter, stateFilter)
+  readonly property var accountFilterOptions: Model.accountFilterOptions(service.profiles)
   readonly property color barIconColor: service.unreadCount > 0 ? urgent : (service.authenticated ? barForeground : Qt.darker(barForeground, 1.55))
+
+  readonly property var accountDropdownOptions: {
+    var options = accountFilterOptions
+    var out = []
+    for (var i = 0; i < options.length; i++) {
+      var count = accountUnreadCount(options[i].value)
+      out.push({
+        value: options[i].value,
+        label: count > 0 ? options[i].label + " (" + count + ")" : options[i].label
+      })
+    }
+    return out
+  }
+
+  readonly property bool otherAccountsUnread: {
+    if (accountFilter === "") return false
+    for (var i = 0; i < service.notifications.length; i++) {
+      var item = service.notifications[i]
+      if (item.unread === true && String(item.profile || "") !== accountFilter) return true
+    }
+    return false
+  }
 
   property int phraseIndex: 0
   readonly property var loadingPhrases: [
@@ -68,12 +92,53 @@ Panel {
     return Color.muted
   }
 
-  function setStateFilter(value) {
-    stateFilter = String(value || "unread")
+  function accountUnreadCount(profile) {
+    var id = String(profile || "")
+    if (id === "") return 0
+    var count = 0
+    for (var i = 0; i < service.notifications.length; i++) {
+      var item = service.notifications[i]
+      if (item.unread === true && String(item.profile || "") === id) count++
+    }
+    return count
+  }
+
+  function ensureAccountFilter() {
+    if (accountFilter === "") return
+    for (var i = 0; i < service.profiles.length; i++) {
+      if (String(service.profiles[i].profile) === accountFilter) return
+    }
+    setAccountFilter("")
+  }
+
+  function resetFilteredView() {
     selectedIndex = 0
     cursorActive = false
     pointerGate.reset()
     if (panelFlick) panelFlick.contentY = 0
+  }
+
+  function setAccountFilter(value) {
+    accountFilter = String(value || "")
+    resetFilteredView()
+  }
+
+  function setStateFilter(value) {
+    stateFilter = String(value || "unread")
+    resetFilteredView()
+  }
+
+  function cycleAccountFilter(delta) {
+    var options = accountFilterOptions
+    if (options.length < 2) return
+    var current = 0
+    for (var i = 0; i < options.length; i++) {
+      if (String(options[i].value) === accountFilter) {
+        current = i
+        break
+      }
+    }
+    setAccountFilter(options[(current + delta + options.length) % options.length].value)
   }
 
   function ensureSelection() {
@@ -142,6 +207,7 @@ Panel {
   Service {
     id: service
     settings: root.settings
+    onProfilesChanged: root.ensureAccountFilter()
   }
 
   Timer {
@@ -210,10 +276,12 @@ Panel {
     function status(): string {
       return JSON.stringify({
         account: service.accountName,
+        profiles: service.accountCount,
         notifications: service.notifications.length,
         unread: service.unreadCount,
         visible: root.filteredNotifications.length,
         stateFilter: root.stateFilter,
+        accountFilter: root.accountFilter,
         refreshing: service.refreshing,
         error: service.lastError
       })
@@ -256,8 +324,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: accountDropdown.popupOpen
       onMoveRequested: function(dx, dy) {
-        if (dy !== 0) root.moveSelection(dy)
+        if (dx !== 0) root.cycleAccountFilter(dx)
+        else if (dy !== 0) root.moveSelection(dy)
       }
       onActivateRequested: root.activateSelection()
       onCloseRequested: root.close()
@@ -266,7 +336,7 @@ Panel {
         if (text === "r" || text === "R") service.refresh()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
-        else if (text === "m" || text === "M") service.markAllRead()
+        else if (text === "m" || text === "M") service.markAllRead(root.accountFilter)
       }
 
       ColumnLayout {
@@ -334,6 +404,33 @@ Panel {
 
           PanelSeparator {
             foreground: root.foreground
+          }
+
+          Dropdown {
+            id: accountDropdown
+            visible: service.accountCount > 1
+            width: parent.width
+            showLabel: false
+            options: root.accountDropdownOptions
+            foreground: root.foreground
+            background: Color.popups.background
+            accent: Color.accent
+            fontFamily: root.fontFamily
+            onChanged: function(value) { root.setAccountFilter(value) }
+
+            Binding on value {
+              value: root.accountFilter
+            }
+
+            Rectangle {
+              visible: root.accountFilter !== "" && root.otherAccountsUnread
+              x: parent.width - width / 2
+              y: -height / 2
+              width: Style.space(8)
+              height: width
+              radius: width / 2
+              color: root.urgent
+            }
           }
 
           Row {
@@ -508,7 +605,7 @@ Panel {
 
                       Text {
                         Layout.fillWidth: true
-                        text: Model.notificationMeta(notificationRow.modelData, root.nowMs)
+                        text: Model.notificationMeta(notificationRow.modelData, root.nowMs, root.accountFilter === "")
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption

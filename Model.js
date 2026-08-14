@@ -48,7 +48,27 @@ function parseIdentity(raw) {
   }
 }
 
-function parseNotifications(raw, limit) {
+function parseProfiles(raw) {
+  var result = parseJson(raw)
+  if (!result.ok) return { ok: false, error: result.error, profiles: [] }
+
+  var data = Array.isArray(result.value.data) ? result.value.data : []
+  var profiles = []
+  for (var i = 0; i < data.length; i++) {
+    var entry = data[i] || {}
+    var name = String(entry.profile || "").trim()
+    if (name === "" || entry.has_token !== true) continue
+    profiles.push({
+      profile: name,
+      account: cleanText(entry.account || name),
+      active: entry.active === true,
+      baseUrl: String(entry.base_url || entry.baseUrl || "")
+    })
+  }
+  return { ok: true, error: "", profiles: profiles }
+}
+
+function parseNotifications(raw, limit, context) {
   var result = parseJson(raw)
   if (!result.ok) return { ok: false, error: result.error, items: [] }
 
@@ -59,7 +79,7 @@ function parseNotifications(raw, limit) {
 
   var items = []
   for (var i = 0; i < source.length; i++) {
-    var item = normalizeNotification(source[i])
+    var item = normalizeNotification(source[i], context)
     if (item) items.push(item)
   }
 
@@ -69,7 +89,7 @@ function parseNotifications(raw, limit) {
   return { ok: true, error: "", items: items }
 }
 
-function normalizeNotification(value) {
+function normalizeNotification(value, context) {
   var item = value || {}
   var id = String(item.id || "").trim()
   if (id === "") return null
@@ -84,6 +104,7 @@ function normalizeNotification(value) {
   var excerpt = cleanText(item.body || "")
   if (excerpt === "" && cardTitle !== "" && fallbackTitle !== cardTitle) excerpt = fallbackTitle
 
+  var profileContext = context && typeof context === "object" ? context : {}
   return {
     id: id,
     title: cardTitle || fallbackTitle,
@@ -98,7 +119,9 @@ function normalizeNotification(value) {
     boardName: cleanText(card.board_name || card.boardName || ""),
     creator: cleanText(item.creator && item.creator.name ? item.creator.name : ""),
     unread: item.read !== true,
-    unreadCount: positiveInteger(item.unread_count, item.read === true ? 0 : 1)
+    unreadCount: positiveInteger(item.unread_count, item.read === true ? 0 : 1),
+    profile: String(profileContext.profile || ""),
+    accountName: cleanText(profileContext.accountName || "")
   }
 }
 
@@ -112,14 +135,47 @@ function sortNotifications(items) {
   return sorted
 }
 
-function filterNotifications(items, state) {
+function filterNotifications(items, profile, state) {
   var source = Array.isArray(items) ? items : []
+  var selectedProfile = String(profile || "")
   var selected = String(state || "all")
   return source.filter(function(item) {
+    if (selectedProfile !== "" && String(item.profile || "") !== selectedProfile) return false
     if (selected === "unread") return item.unread === true
     if (selected === "previous") return item.unread !== true
     return true
   })
+}
+
+function accountFilterOptions(profiles) {
+  var options = [{ value: "", label: "All accounts" }]
+  var source = Array.isArray(profiles) ? profiles.slice() : []
+  source.sort(function(a, b) {
+    return cleanText(a.accountName || a.account || a.profile || "").toLowerCase().localeCompare(
+      cleanText(b.accountName || b.account || b.profile || "").toLowerCase())
+  })
+  for (var i = 0; i < source.length; i++) {
+    var profile = source[i] || {}
+    var value = String(profile.profile || "")
+    if (value === "") continue
+    options.push({
+      value: value,
+      label: cleanText(profile.accountName || profile.account || value)
+    })
+  }
+  return options
+}
+
+function fizzyArgs(profile, args) {
+  var command = ["fizzy"]
+  var name = String(profile || "").trim()
+  if (name !== "") {
+    command.push("--profile")
+    command.push(name)
+  }
+  var rest = Array.isArray(args) ? args : []
+  for (var i = 0; i < rest.length; i++) command.push(rest[i])
+  return command
 }
 
 function unreadCount(items) {
@@ -170,15 +226,20 @@ function notificationTime(timestampMs, nowMs) {
   return label
 }
 
-function notificationMeta(item, nowMs) {
+function notificationMeta(item, nowMs, showAccount) {
   if (!item) return ""
   var parts = []
   var age = notificationTime(item.timestampMs, nowMs)
   var creator = cleanText(item.creator || "")
   var board = cleanText(item.boardName || "")
+  var account = cleanText(item.accountName || "")
   if (age !== "") parts.push(age)
   if (creator !== "") parts.push(creator)
-  if (board !== "") parts.push(board)
+  if (board !== "") {
+    parts.push(showAccount === true && account !== "" ? board + " (" + account + ")" : board)
+  } else if (showAccount === true && account !== "") {
+    parts.push(account)
+  }
   return parts.join(" • ")
 }
 
@@ -205,9 +266,12 @@ function positiveInteger(value, fallback) {
 if (typeof module !== "undefined") {
   module.exports = {
     parseIdentity: parseIdentity,
+    parseProfiles: parseProfiles,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,
     filterNotifications: filterNotifications,
+    accountFilterOptions: accountFilterOptions,
+    fizzyArgs: fizzyArgs,
     unreadCount: unreadCount,
     openUrl: openUrl,
     parseThemeColors: parseThemeColors,

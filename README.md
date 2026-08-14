@@ -10,6 +10,7 @@ A Quickshell bar plugin that shows notifications from [Fizzy](https://fizzy.do) 
 - Opens the related card in the browser and marks the notification as read.
 - Marks all notifications as read from the keyboard.
 - Uses the Fizzy CLI's existing credential store. It does not read, copy, or store API tokens.
+- Combines every signed-in CLI profile (`fizzy auth list`) without calling `fizzy auth switch`. Add another account with `fizzy auth login TOKEN --profile NAME --account SLUG`.
 
 ## Requirements
 
@@ -27,7 +28,7 @@ fizzy auth status
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/vpbxlgb/omarchy-fizzy.git --enable
+omarchy plugin add https://github.com/gigasolo/omarchy-fizzy.git --enable
 ```
 
 For a local checkout:
