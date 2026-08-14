@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "lonbaker.fizzy",
+  "name": "Fizzy",
+  "version": "1.0.0",
+  "author": "Lon Baker",
+  "license": "MIT",
+  "homepage": "https://github.com/vpbxlgb/omarchy-fizzy",
+  "description": "Unread Fizzy.do notifications in the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Fizzy",
+    "description": "Unread Fizzy notifications with a keyboard-driven tray.",
+    "category": "Productivity",
+    "aliases": [
+      "fizzy",
+      "notifications"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "maxItems": 40
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "description": "How often the widget polls Fizzy. Opening the panel refreshes if the data is stale.",
+        "min": 60,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "maxItems",
+        "type": "integer",
+        "label": "Notifications to keep",
+        "description": "Newest notifications kept after each refresh.",
+        "min": 5,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 40
+      }
+    ]
+  }
+}
