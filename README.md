@@ -1,23 +1,25 @@
 # Fizzy for Omarchy
 
-A Quickshell bar plugin that shows notifications from [Fizzy](https://fizzy.do) through the [Fizzy CLI](https://github.com/basecamp/fizzy-cli).
+Unread [Fizzy](https://fizzy.do) notifications in your Omarchy bar. Click the mark to open a keyboard-friendly tray, open a card in the browser, and mark it read.
 
-## Features
+This is an MIT-licensed open source plugin for [Omarchy Quattro](https://omarchy.org/). It is not affiliated with or endorsed by 37signals.
 
-- Shows unread Fizzy notifications in the Omarchy bar.
-- Turns the bar mark urgent while anything is unread.
-- Filters the panel between **New for you** and **Previous**.
-- Opens the related card in the browser and marks the notification as read.
-- Marks all notifications as read from the keyboard.
-- Uses the Fizzy CLI's existing credential store. It does not read, copy, or store API tokens.
-- Uses the CLI's current login only. Multiple accounts are not supported.
+## What you get
+
+- A small Fizzy mark on the bar. It turns urgent when something is unread.
+- A panel with **New for you** and **Previous**.
+- Click or press Enter to open the card and mark the notification read.
+- `m` to mark everything read.
+- Uses the [Fizzy CLI](https://github.com/basecamp/fizzy-cli) you already signed in with. The plugin never reads your token.
+
+It uses the CLI’s current login only. Multiple Fizzy accounts are not supported.
 
 ## Requirements
 
-- Omarchy Quattro (4.0) with third-party shell plugins.
-- [Fizzy CLI](https://github.com/basecamp/fizzy-cli) 4.x, signed in.
+1. [Omarchy](https://omarchy.org/) 4 (Quattro) with shell plugins.
+2. The Fizzy CLI, signed in.
 
-On Omarchy / Arch:
+On Omarchy:
 
 ```sh
 omarchy pkg aur add fizzy-cli
@@ -25,47 +27,69 @@ fizzy setup
 fizzy auth status
 ```
 
+You should see that you are authenticated before installing the plugin.
+
 ## Install
 
 ```sh
 omarchy plugin add https://github.com/gigasolo/omarchy-fizzy.git --enable
 ```
 
-For a local checkout:
+Omarchy may ask which side of the bar to use. The default is the right.
 
-```sh
-omarchy plugin add /home/lonbaker/code/omarchy-fizzy --enable
-```
+Then click the new Fizzy mark. If the panel says to run `fizzy setup`, finish CLI login and right-click the mark to refresh.
 
-Choose a bar section if Omarchy asks. The manifest defaults to the right.
+## Use
 
-## Usage
+| Action | How |
+| --- | --- |
+| Open or close the panel | Left-click the mark |
+| Refresh now | Right-click or middle-click, or press `r` |
+| Move | `j` / `k` or the arrow keys |
+| Open the selected card | Enter |
+| Unread / previous | `u` / `p` |
+| Mark all read | `m` |
+| Close | Escape |
+| Next bar panel | Tab |
 
-- Left-click the Fizzy mark to open or close the panel.
-- Right-click or middle-click to refresh.
-- Click a notification to open its card. Unread items are also marked as read.
-- `j` / `k` or arrows move through notifications.
-- Enter opens the selected card.
-- `u` shows unread, `p` shows previous, `r` refreshes, `m` marks all as read.
-- Escape closes the panel. Tab moves to the next bar panel.
-
-## Updates
+## Update and remove
 
 ```sh
 omarchy plugin update lonbaker.fizzy
-```
-
-## Remove
-
-```sh
 omarchy plugin remove lonbaker.fizzy
 ```
 
-Removing the plugin does not log out of Fizzy or change the CLI config.
+Removing the plugin does not log you out of Fizzy.
 
-## Privacy and security
+## Settings
 
-The plugin runs these local CLI commands:
+Edit the widget entry in `~/.config/omarchy/shell.json` if you want to change the defaults:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `refreshIntervalSec` | `300` | How often the bar polls Fizzy. Opening the panel also refreshes if the data is stale. |
+| `maxItems` | `40` | Newest notifications kept after each refresh. |
+
+## If something is wrong
+
+**The mark is missing.** Confirm the plugin is enabled:
+
+```sh
+omarchy plugin list | grep fizzy
+omarchy plugin enable lonbaker.fizzy --section right
+```
+
+**The panel says the CLI is not installed.** Install `fizzy-cli` with the command in [Requirements](#requirements).
+
+**The panel says to run `fizzy setup`.** Sign in with the Fizzy CLI, then right-click the mark.
+
+**The count looks stale.** Right-click to refresh, or wait for the next poll.
+
+Plugins run as unsandboxed code inside `omarchy-shell`. Read the source before you enable a third-party plugin.
+
+## How it talks to Fizzy
+
+The plugin only runs these local commands. It never sends a token on the command line, and it never writes notification content to disk.
 
 ```
 fizzy identity show --json
@@ -74,17 +98,25 @@ fizzy notification read <id> --json
 fizzy notification read-all --json
 ```
 
-Notification data is held in the Quickshell process memory. The plugin does not write notification content, account details, credentials, or tokens to disk.
-
-Plugins run as unsandboxed code inside `omarchy-shell`. Review the source before enabling it.
-
-## Development
+## Develop
 
 ```sh
+git clone https://github.com/gigasolo/omarchy-fizzy.git
+cd omarchy-fizzy
 ./tests/run
 omarchy plugin validate .
 ```
 
+To load a local checkout:
+
+```sh
+omarchy plugin add "$PWD" --enable
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
-MIT. Not affiliated with or endorsed by 37signals.
+[MIT](LICENSE). Copyright (c) 2026 Lon Baker.
+
+Fizzy and Omarchy are trademarks of their respective owners.
