@@ -10,7 +10,7 @@ A Quickshell bar plugin that shows notifications from [Fizzy](https://fizzy.do) 
 - Opens the related card in the browser and marks the notification as read.
 - Marks all notifications as read from the keyboard.
 - Uses the Fizzy CLI's existing credential store. It does not read, copy, or store API tokens.
-- Combines every signed-in CLI profile (`fizzy auth list`) without calling `fizzy auth switch`. Add another account with `fizzy auth login TOKEN --profile NAME --account SLUG`.
+- Uses the CLI's current login only. Multiple accounts are not supported.
 
 ## Requirements
 

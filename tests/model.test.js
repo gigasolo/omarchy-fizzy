@@ -147,9 +147,9 @@ test("filterNotifications splits unread and previous without reordering", () => 
     { id: "also-new", unread: true }
   ]
 
-  assert.deepEqual(Model.filterNotifications(items, "", "unread").map(item => item.id), ["new", "also-new"])
-  assert.deepEqual(Model.filterNotifications(items, "", "previous").map(item => item.id), ["old"])
-  assert.deepEqual(Model.filterNotifications(items, "", "all").map(item => item.id), ["new", "old", "also-new"])
+  assert.deepEqual(Model.filterNotifications(items, "unread").map(item => item.id), ["new", "also-new"])
+  assert.deepEqual(Model.filterNotifications(items, "previous").map(item => item.id), ["old"])
+  assert.deepEqual(Model.filterNotifications(items, "all").map(item => item.id), ["new", "old", "also-new"])
 })
 
 test("unreadCount counts unread items", () => {
@@ -195,72 +195,6 @@ test("notificationTypeIcon maps known Fizzy source types", () => {
   assert.notEqual(Model.notificationTypeIcon("mention"), Model.notificationTypeIcon("event"))
   assert.ok(Model.notificationTypeIcon("mention"))
   assert.ok(Model.notificationTypeIcon("unknown"))
-})
-
-test("parseProfiles keeps token-bearing profiles and skips the rest", () => {
-  const result = Model.parseProfiles(envelope([
-    { profile: "work", account: "acme", has_token: true, active: true, base_url: "https://app.fizzy.do" },
-    { profile: "empty", account: "idle", has_token: false, active: false },
-    { profile: "", has_token: true }
-  ]))
-
-  assert.equal(result.ok, true)
-  assert.deepEqual(result.profiles, [
-    { profile: "work", account: "acme", active: true, baseUrl: "https://app.fizzy.do" }
-  ])
-})
-
-test("parseNotifications stamps the profile context onto each item", () => {
-  const result = Model.parseNotifications(envelope([eventNotification()]), 40, {
-    profile: "work",
-    accountName: "Acme"
-  })
-
-  assert.equal(result.items[0].profile, "work")
-  assert.equal(result.items[0].accountName, "Acme")
-})
-
-test("filterNotifications combines profile and read-state filters", () => {
-  const items = [
-    { id: "work-new", profile: "work", unread: true },
-    { id: "home-new", profile: "home", unread: true },
-    { id: "work-old", profile: "work", unread: false }
-  ]
-
-  assert.deepEqual(Model.filterNotifications(items, "work", "unread").map(item => item.id), ["work-new"])
-  assert.deepEqual(Model.filterNotifications(items, "work", "previous").map(item => item.id), ["work-old"])
-  assert.deepEqual(Model.filterNotifications(items, "", "unread").map(item => item.id), ["work-new", "home-new"])
-})
-
-test("accountFilterOptions lists all profiles after an All accounts row", () => {
-  assert.deepEqual(Model.accountFilterOptions([
-    { profile: "home", accountName: "Home" },
-    { profile: "work", accountName: "Acme" }
-  ]), [
-    { value: "", label: "All accounts" },
-    { value: "work", label: "Acme" },
-    { value: "home", label: "Home" }
-  ])
-})
-
-test("notificationMeta includes the account only when asked", () => {
-  const item = {
-    timestampMs: 0,
-    creator: "Ada",
-    boardName: "Orders",
-    accountName: "Acme"
-  }
-  assert.equal(Model.notificationMeta(item, 0, false), "Ada • Orders")
-  assert.equal(Model.notificationMeta(item, 0, true), "Ada • Orders (Acme)")
-})
-
-test("fizzyArgs prefixes --profile when a profile is set", () => {
-  assert.deepEqual(Model.fizzyArgs("work", ["notification", "list", "--json"]), [
-    "fizzy", "--profile", "work", "notification", "list", "--json"
-  ])
-  assert.deepEqual(Model.fizzyArgs("", ["identity", "show", "--json"]), [
-    "fizzy", "identity", "show", "--json"
-  ])
 })
 
 test("invalid CLI output returns a useful parse failure", () => {
