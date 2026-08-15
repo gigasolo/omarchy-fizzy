@@ -10,6 +10,7 @@ Item {
   property bool refreshing: false
   property bool installed: true
   property bool authenticated: false
+  property string setupKind: ""
   property var account: null
   property var user: null
   property var notifications: []
@@ -57,12 +58,32 @@ Item {
   function refresh() {
     if (refreshing || identityProcess.running || listProcess.running) return
     refreshing = true
-    installed = true
     lastError = ""
     _identityOutput = ""
     _identityError = ""
     identityProcess.command = ["fizzy", "identity", "show", "--json"]
     identityProcess.running = true
+  }
+
+  function beginSetup() {
+    if (setupLaunchLock.running) return
+    setupLaunchLock.restart()
+    if (setupKind === "missing_cli" || !installed) {
+      Quickshell.execDetached([
+        "omarchy-launch-floating-terminal-with-presentation",
+        "echo 'Installing Fizzy CLI...'; omarchy pkg aur add fizzy-cli && echo && fizzy setup"
+      ])
+      actionStatus = "Opened install in a terminal"
+    } else {
+      Quickshell.execDetached([
+        "omarchy-launch-tui",
+        "--app-id=org.omarchy.fizzy-setup",
+        "fizzy",
+        "setup"
+      ])
+      actionStatus = "Opened fizzy setup"
+    }
+    actionStatusTimer.restart()
   }
 
   function finishRefresh(items) {
@@ -145,7 +166,7 @@ Item {
 
   function finishRead(exitCode, stdout, stderr) {
     if (exitCode !== 0) {
-      lastError = conciseError(stderr || stdout, "Could not mark the notification as read")
+      lastError = conciseError(Model.friendlyCliError(stderr || stdout, "Could not mark the notification as read"))
       actionStatus = lastError
     } else {
       actionStatus = _readAll ? "Marked all as read" : "Marked as read"
@@ -180,6 +201,12 @@ Item {
     onTriggered: root.actionStatus = ""
   }
 
+  Timer {
+    id: setupLaunchLock
+    interval: 1500
+    repeat: false
+  }
+
   Process {
     id: identityProcess
     running: false
@@ -197,17 +224,11 @@ Item {
     onExited: function(exitCode) {
       var stdout = String(identityStdout.text || root._identityOutput || "")
       var stderr = String(identityStderr.text || root._identityError || "")
-      if (exitCode !== 0) {
-        root.installed = exitCode !== 127
-        root.authenticated = false
-        root.lastError = root.conciseError(stderr || stdout, root.installed ? "Run fizzy setup" : "Fizzy CLI is not installed")
-        root.refreshing = false
-        return
-      }
-
-      var parsed = Model.parseIdentity(stdout)
+      var parsed = Model.interpretIdentity(stdout || stderr, exitCode)
+      root.installed = parsed.installed
+      root.authenticated = parsed.authenticated
+      root.setupKind = parsed.setupKind
       if (!parsed.ok) {
-        root.authenticated = false
         root.lastError = parsed.error
         root.refreshing = false
         return
@@ -215,7 +236,7 @@ Item {
 
       root.account = parsed.account
       root.user = parsed.user
-      root.authenticated = true
+      root.lastError = ""
       root._listOutput = ""
       root._listError = ""
       listProcess.command = ["fizzy", "notification", "list", "--json"]
@@ -241,7 +262,7 @@ Item {
       var stdout = String(listStdout.text || root._listOutput || "")
       var stderr = String(listStderr.text || root._listError || "")
       if (exitCode !== 0) {
-        root.lastError = root.conciseError(stderr || stdout, "Could not list Fizzy notifications")
+        root.lastError = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not list Fizzy notifications"))
         root.refreshing = false
         return
       }

@@ -23,6 +23,8 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property var filteredNotifications: Model.filterNotifications(service.notifications, stateFilter)
+  readonly property bool needsSetup: service.setupKind !== ""
+  readonly property var setupGuide: Model.setupGuide(service.setupKind)
   readonly property color barIconColor: service.unreadCount > 0 ? urgent : (service.authenticated ? barForeground : Qt.darker(barForeground, 1.55))
 
   property int phraseIndex: 0
@@ -36,10 +38,11 @@ Panel {
 
   readonly property string heroStatusText: {
     if (service.actionStatus !== "") return service.actionStatus
+    if (root.needsSetup) return root.setupGuide.hero
     if (service.lastError !== "") return service.lastError
     if (rotatingPhrases) return loadingPhrases[phraseIndex % loadingPhrases.length]
-    if (!service.installed) return "Fizzy CLI is not installed"
-    if (!service.authenticated) return "Run fizzy setup"
+    if (!service.installed) return "CLI not installed"
+    if (!service.authenticated) return "Sign in to Fizzy"
     if (service.accountName !== "") return service.accountName
     return "Fizzy.do"
   }
@@ -100,6 +103,11 @@ Panel {
   }
 
   function activateSelection() {
+    if (root.needsSetup) {
+      if (!cursorActive) return
+      service.beginSetup()
+      return
+    }
     if (!cursorActive || filteredNotifications.length === 0) return
     service.openNotification(filteredNotifications[selectedIndex])
   }
@@ -149,6 +157,13 @@ Panel {
     repeat: true
     running: root.opened
     onTriggered: root.nowMs = Date.now()
+  }
+
+  Timer {
+    interval: 4000
+    repeat: true
+    running: root.opened && root.needsSetup
+    onTriggered: service.refresh()
   }
 
   Timer {
@@ -215,7 +230,8 @@ Panel {
         visible: root.filteredNotifications.length,
         stateFilter: root.stateFilter,
         refreshing: service.refreshing,
-        error: service.lastError
+        error: service.lastError,
+        setup: service.setupKind
       })
     }
   }
@@ -236,7 +252,9 @@ Panel {
     }
     tooltipText: service.refreshing
       ? "Refreshing Fizzy notifications"
-      : (service.unreadCount === 1 ? "1 unread Fizzy notification" : service.unreadCount + " unread Fizzy notifications")
+      : (root.needsSetup
+        ? root.setupGuide.title
+        : (service.unreadCount === 1 ? "1 unread Fizzy notification" : service.unreadCount + " unread Fizzy notifications"))
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) service.refresh()
       else root.toggle()
@@ -264,6 +282,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r" || text === "R") service.refresh()
+        else if ((text === "s" || text === "S") && root.needsSetup) service.beginSetup()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
         else if (text === "m" || text === "M") service.markAllRead()
@@ -337,6 +356,7 @@ Panel {
           }
 
           Row {
+            visible: !root.needsSetup
             spacing: Style.space(2)
 
             Button {
@@ -384,8 +404,13 @@ Panel {
             width: panelFlick.width
             spacing: Style.space(12)
 
+            SetupCard {
+              visible: root.needsSetup
+              width: parent.width
+            }
+
             Text {
-              visible: !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
               width: parent.width
               text: root.emptyMessage()
               color: root.dim
@@ -397,7 +422,7 @@ Panel {
             }
 
             Text {
-              visible: service.lastError !== "" && root.filteredNotifications.length === 0
+              visible: !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
               width: parent.width
               text: service.lastError
               color: root.urgent
@@ -411,7 +436,7 @@ Panel {
 
             Column {
               id: notificationColumn
-              visible: root.filteredNotifications.length > 0
+              visible: !root.needsSetup && root.filteredNotifications.length > 0
               width: parent.width
               spacing: Style.space(8)
 
@@ -541,6 +566,85 @@ Panel {
             }
           }
         }
+      }
+    }
+  }
+
+  component SetupCard: CursorSurface {
+    id: setupCard
+
+    hasCursor: root.cursorActive && root.needsSetup
+    foreground: root.foreground
+
+    implicitHeight: setupRow.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: root.cursorActive = true
+      onClicked: service.beginSetup()
+    }
+
+    RowLayout {
+      id: setupRow
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(8)
+
+      Text {
+        text: root.setupGuide.kind === "missing_cli" ? "󰏖" : "󰌆"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.heading
+        Layout.alignment: Qt.AlignTop
+        Layout.topMargin: Style.space(2)
+      }
+
+      ColumnLayout {
+        Layout.fillWidth: true
+        spacing: Style.space(4)
+
+        Text {
+          Layout.fillWidth: true
+          text: root.setupGuide.title
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.weight: Font.DemiBold
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: root.setupGuide.detail
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: root.setupGuide.commands.map(function(command) { return "$ " + command }).join("\n")
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+          topPadding: Style.space(2)
+        }
+      }
+
+      PanelActionButton {
+        iconText: "󰌋"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        tooltipText: root.setupGuide.action
+        Layout.alignment: Qt.AlignVCenter
+        onClicked: service.beginSetup()
       }
     }
   }

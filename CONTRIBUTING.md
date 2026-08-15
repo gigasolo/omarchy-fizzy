@@ -4,7 +4,7 @@ Thanks for helping with Fizzy for Omarchy.
 
 ## Before you start
 
-You need Omarchy Quattro, the Fizzy CLI, and a signed-in Fizzy account so you can click through the panel.
+You need [Omarchy](https://omarchy.org/) 4 (Quattro), the Fizzy CLI, and a signed-in Fizzy account so you can click through the panel.
 
 ## Make a change
 
@@ -18,7 +18,7 @@ You need Omarchy Quattro, the Fizzy CLI, and a signed-in Fizzy account so you ca
 ./tests/run
 ```
 
-That runs the Model tests and `omarchy plugin validate`.
+That runs the Model tests and `omarchy plugin validate`. Omarchy will not install a plugin that fails validation.
 
 6. Load your checkout and click through the panel: open, refresh, unread/previous, open a card, mark read, disable, re-enable.
 
@@ -26,7 +26,7 @@ That runs the Model tests and `omarchy plugin validate`.
 
 - Describe what you changed and how you tried it.
 - Keep the MIT license.
-- Do not commit tokens, Fizzy config, or personal account names.
+- Do not commit tokens, Fizzy config, screenshots of tokens, or personal account names.
 
 ## License
 

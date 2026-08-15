@@ -79,6 +79,73 @@ test("parseIdentity fails when the CLI reports an error", () => {
   assert.match(result.error, /not authenticated|fizzy setup/i)
 })
 
+const AUTH_REQUIRED_ENVELOPE = `{
+  "ok": false,
+  "error": "No API token configured. Run 'fizzy auth login TOKEN' or set FIZZY_TOKEN",
+  "code": "auth_required",
+  "hint": "Run 'fizzy auth login TOKEN' or set FIZZY_TOKEN"
+}`
+
+test("parseIdentity maps the real no-token envelope to a setup hint", () => {
+  const result = Model.parseIdentity(AUTH_REQUIRED_ENVELOPE)
+
+  assert.equal(result.ok, false)
+  assert.match(result.error, /fizzy setup/i)
+  assert.doesNotMatch(result.error, /\{|FIZZY_TOKEN|auth login/)
+})
+
+test("interpretIdentity treats auth_required JSON as setup, not a raw dump", () => {
+  const result = Model.interpretIdentity(AUTH_REQUIRED_ENVELOPE, 3)
+
+  assert.equal(result.ok, false)
+  assert.equal(result.installed, true)
+  assert.equal(result.authenticated, false)
+  assert.equal(result.setupKind, "auth_required")
+  assert.equal(result.error, "")
+})
+
+test("interpretIdentity treats a missing CLI as an install setup state", () => {
+  const result = Model.interpretIdentity("fizzy: command not found", 127)
+
+  assert.equal(result.installed, false)
+  assert.equal(result.authenticated, false)
+  assert.equal(result.setupKind, "missing_cli")
+  assert.equal(result.error, "")
+})
+
+test("interpretIdentity keeps unexpected failures as errors, not setup", () => {
+  const result = Model.interpretIdentity("not json", 1)
+
+  assert.equal(result.setupKind, "")
+  assert.equal(result.authenticated, false)
+  assert.match(result.error, /parse/i)
+})
+
+test("setupGuide for missing CLI explains the Omarchy AUR install", () => {
+  const guide = Model.setupGuide("missing_cli")
+
+  assert.match(guide.hero, /not installed/i)
+  assert.match(guide.title, /install/i)
+  assert.match(guide.action, /install/i)
+  assert.ok(guide.commands.some(command => /omarchy pkg aur add fizzy-cli/.test(command)))
+  assert.ok(guide.commands.some(command => command === "fizzy setup"))
+})
+
+test("setupGuide for auth points at fizzy setup", () => {
+  const guide = Model.setupGuide("auth_required")
+
+  assert.match(guide.hero, /sign in/i)
+  assert.match(guide.action, /set up|setup|sign in/i)
+  assert.deepEqual(guide.commands, ["fizzy setup"])
+  assert.doesNotMatch(guide.detail, /\{|FIZZY_TOKEN/)
+})
+
+test("friendlyCliError unwraps JSON envelopes instead of dumping them", () => {
+  assert.match(Model.friendlyCliError(AUTH_REQUIRED_ENVELOPE, "fallback"), /fizzy setup/i)
+  assert.doesNotMatch(Model.friendlyCliError(AUTH_REQUIRED_ENVELOPE, "fallback"), /\{/)
+  assert.equal(Model.friendlyCliError("", "Could not list Fizzy notifications"), "Could not list Fizzy notifications")
+})
+
 test("parseIdentity fails when no accounts are available", () => {
   const result = Model.parseIdentity(envelope({ accounts: [] }))
   assert.equal(result.ok, false)

@@ -6,36 +6,124 @@ function parseJson(raw) {
     var parsed = JSON.parse(text)
     if (!parsed || typeof parsed !== "object") return { ok: false, error: "The Fizzy CLI returned invalid data" }
     if (parsed.ok === false) {
-      return { ok: false, error: setupHint(parsed.error || parsed.message || "The Fizzy CLI request failed") }
+      return {
+        ok: false,
+        error: setupHint(parsed.error || parsed.message || "The Fizzy CLI request failed", parsed.code),
+        code: String(parsed.code || "")
+      }
     }
-    return { ok: true, value: parsed }
+    return { ok: true, value: parsed, code: String(parsed.code || "") }
   } catch (error) {
-    return { ok: false, error: "Could not parse the Fizzy CLI response" }
+    return { ok: false, error: "Could not parse the Fizzy CLI response", code: "" }
   }
 }
 
-function setupHint(message) {
-  var text = cleanText(message)
-  if (/not authenticated|unauthenticated|unauthorized|no token|logged out/i.test(text))
+function isAuthFailure(message, code) {
+  var kind = String(code || "").toLowerCase()
+  if (kind === "auth_required" || kind === "unauthenticated" || kind === "unauthorized")
+    return true
+  return /not authenticated|unauthenticated|unauthorized|no api token|no token|logged out|fizzy_token|auth login|auth_required|no fizzy account|run fizzy setup/i.test(cleanText(message))
+}
+
+function isMissingCli(message, exitCode) {
+  if (Number(exitCode) === 127) return true
+  return /command not found|no such file or directory/i.test(cleanText(message))
+}
+
+function setupHint(message, code) {
+  if (isAuthFailure(message, code))
     return "Not authenticated. Run fizzy setup."
-  return text || "The Fizzy CLI request failed"
+  return cleanText(message) || "The Fizzy CLI request failed"
+}
+
+function friendlyCliError(raw, fallback) {
+  var text = String(raw || "").trim()
+  if (text === "") return fallback || "The Fizzy CLI request failed"
+  var parsed = parseJson(text)
+  if (parsed.ok === false) return parsed.error || fallback || "The Fizzy CLI request failed"
+  return fallback || "The Fizzy CLI request failed"
+}
+
+function emptyIdentity(overrides) {
+  var result = {
+    ok: false,
+    installed: true,
+    authenticated: false,
+    setupKind: "",
+    error: "",
+    account: null,
+    user: null
+  }
+  if (!overrides) return result
+  for (var key in overrides) result[key] = overrides[key]
+  return result
+}
+
+function interpretIdentity(raw, exitCode) {
+  if (isMissingCli(raw, exitCode)) {
+    return emptyIdentity({ installed: false, setupKind: "missing_cli" })
+  }
+
+  var parsed = parseIdentity(raw)
+  if (parsed.ok) {
+    return {
+      ok: true,
+      installed: true,
+      authenticated: true,
+      setupKind: "",
+      error: "",
+      account: parsed.account,
+      user: parsed.user
+    }
+  }
+
+  if (isAuthFailure(parsed.error, parsed.code)) {
+    return emptyIdentity({ setupKind: "auth_required" })
+  }
+
+  return emptyIdentity({ error: parsed.error || "The Fizzy CLI request failed" })
+}
+
+function setupGuide(kind) {
+  if (kind === "missing_cli") {
+    return {
+      kind: "missing_cli",
+      hero: "CLI not installed",
+      title: "Install Fizzy CLI",
+      detail: "Installs fizzy-cli from the AUR, then walks you through sign-in. Refresh the panel when you're done.",
+      action: "Install and set up",
+      commands: ["omarchy pkg aur add fizzy-cli", "fizzy setup"]
+    }
+  }
+  if (kind === "auth_required") {
+    return {
+      kind: "auth_required",
+      hero: "Sign in to Fizzy",
+      title: "Set up Fizzy",
+      detail: "Opens fizzy setup in a terminal so you can add your API token. Refresh the panel when you're done.",
+      action: "Open setup",
+      commands: ["fizzy setup"]
+    }
+  }
+  return { kind: "", hero: "", title: "", detail: "", action: "", commands: [] }
 }
 
 function parseIdentity(raw) {
   var result = parseJson(raw)
-  if (!result.ok) return { ok: false, error: result.error, account: null, user: null }
+  if (!result.ok) return { ok: false, error: result.error, code: result.code || "", account: null, user: null }
 
   var data = result.value.data || {}
   var accounts = Array.isArray(data.accounts) ? data.accounts : []
   var first = accounts[0]
   if (!first || !first.id) {
-    return { ok: false, error: "No Fizzy account found. Run fizzy setup.", account: null, user: null }
+    return { ok: false, error: "No Fizzy account found. Run fizzy setup.", code: "auth_required", account: null, user: null }
   }
 
   var user = first.user || data.user || {}
   return {
     ok: true,
     error: "",
+    code: "",
     account: {
       id: String(first.id),
       name: cleanText(first.name || "Fizzy"),
@@ -205,6 +293,9 @@ function positiveInteger(value, fallback) {
 if (typeof module !== "undefined") {
   module.exports = {
     parseIdentity: parseIdentity,
+    interpretIdentity: interpretIdentity,
+    setupGuide: setupGuide,
+    friendlyCliError: friendlyCliError,
     parseNotifications: parseNotifications,
     sortNotifications: sortNotifications,
     filterNotifications: filterNotifications,
