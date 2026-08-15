@@ -146,7 +146,7 @@ To help people find it, list it at [omarchyplugins.com](https://omarchyplugins.c
 
 ## License
 
-[MIT](LICENSE). Copyright (c) 2026 Lon Baker.
+[MIT](LICENSE). Copyright (c) 2026 GigaSolo LLC.
 
 SPDX-License-Identifier: MIT
 
