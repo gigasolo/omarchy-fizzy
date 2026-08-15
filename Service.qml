@@ -56,13 +56,35 @@ Item {
   }
 
   function refresh() {
-    if (refreshing || identityProcess.running || listProcess.running) return
+    if (whichProcess.running || identityProcess.running || listProcess.running) return
     refreshing = true
     lastError = ""
     _identityOutput = ""
     _identityError = ""
-    identityProcess.command = ["fizzy", "identity", "show", "--json"]
-    identityProcess.running = true
+    whichProcess.command = ["which", "fizzy"]
+    whichProcess.running = true
+    probeWatchdog.restart()
+  }
+
+  function applyIdentityResult(raw, exitCode) {
+    var parsed = Model.interpretIdentity(raw, exitCode)
+    installed = parsed.installed
+    authenticated = parsed.authenticated
+    setupKind = parsed.setupKind
+    if (!parsed.ok) {
+      lastError = parsed.error
+      refreshing = false
+      probeWatchdog.stop()
+      return
+    }
+
+    account = parsed.account
+    user = parsed.user
+    lastError = ""
+    _listOutput = ""
+    _listError = ""
+    listProcess.command = ["fizzy", "notification", "list", "--json"]
+    listProcess.running = true
   }
 
   function beginSetup() {
@@ -91,6 +113,7 @@ Item {
     unreadCount = Model.unreadCount(notifications)
     refreshing = false
     lastUpdated = new Date()
+    probeWatchdog.stop()
   }
 
   function openNotification(item) {
@@ -207,6 +230,36 @@ Item {
     repeat: false
   }
 
+  Timer {
+    id: probeWatchdog
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      if (!root.refreshing) return
+      if (whichProcess.running) whichProcess.running = false
+      if (identityProcess.running) identityProcess.running = false
+      if (listProcess.running) listProcess.running = false
+      if (root.setupKind === "") root.applyIdentityResult("", 127)
+      else root.refreshing = false
+    }
+  }
+
+  Process {
+    id: whichProcess
+    running: false
+    command: []
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.applyIdentityResult("", exitCode)
+        return
+      }
+      root._identityOutput = ""
+      root._identityError = ""
+      identityProcess.command = ["fizzy", "identity", "show", "--json"]
+      identityProcess.running = true
+    }
+  }
+
   Process {
     id: identityProcess
     running: false
@@ -224,23 +277,7 @@ Item {
     onExited: function(exitCode) {
       var stdout = String(identityStdout.text || root._identityOutput || "")
       var stderr = String(identityStderr.text || root._identityError || "")
-      var parsed = Model.interpretIdentity(stdout || stderr, exitCode)
-      root.installed = parsed.installed
-      root.authenticated = parsed.authenticated
-      root.setupKind = parsed.setupKind
-      if (!parsed.ok) {
-        root.lastError = parsed.error
-        root.refreshing = false
-        return
-      }
-
-      root.account = parsed.account
-      root.user = parsed.user
-      root.lastError = ""
-      root._listOutput = ""
-      root._listError = ""
-      listProcess.command = ["fizzy", "notification", "list", "--json"]
-      listProcess.running = true
+      root.applyIdentityResult(stdout || stderr, exitCode)
     }
   }
 
@@ -264,6 +301,7 @@ Item {
       if (exitCode !== 0) {
         root.lastError = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not list Fizzy notifications"))
         root.refreshing = false
+        probeWatchdog.stop()
         return
       }
 
@@ -271,6 +309,7 @@ Item {
       if (!parsed.ok) {
         root.lastError = parsed.error
         root.refreshing = false
+        probeWatchdog.stop()
         return
       }
       root.finishRefresh(parsed.items)

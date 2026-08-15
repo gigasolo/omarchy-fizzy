@@ -27,7 +27,9 @@ function isAuthFailure(message, code) {
 
 function isMissingCli(message, exitCode) {
   if (Number(exitCode) === 127) return true
-  return /command not found|no such file or directory/i.test(cleanText(message))
+  var text = cleanText(message)
+  if (/command not found|no such file or directory/i.test(text)) return true
+  return Number(exitCode) !== 0 && text === ""
 }
 
 function setupHint(message, code) {

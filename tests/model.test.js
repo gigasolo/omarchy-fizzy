@@ -113,6 +113,14 @@ test("interpretIdentity treats a missing CLI as an install setup state", () => {
   assert.equal(result.error, "")
 })
 
+test("interpretIdentity treats a failed which-style probe as missing CLI", () => {
+  const result = Model.interpretIdentity("", 1)
+
+  assert.equal(result.installed, false)
+  assert.equal(result.setupKind, "missing_cli")
+  assert.equal(result.error, "")
+})
+
 test("interpretIdentity keeps unexpected failures as errors, not setup", () => {
   const result = Model.interpretIdentity("not json", 1)
 
