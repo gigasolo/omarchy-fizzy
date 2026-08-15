@@ -9,8 +9,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "lonbaker.fizzy"
-  ipcTarget: "lonbaker.fizzy"
+  moduleName: "gigasolo.fizzy"
+  ipcTarget: "gigasolo.fizzy"
   manageIpc: false
 
   property int selectedIndex: 0

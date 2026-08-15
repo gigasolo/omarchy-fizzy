@@ -31,8 +31,8 @@ Without `--enable`, the plugin is cloned and left off so you can review it first
 
 ```sh
 omarchy plugin add https://github.com/gigasolo/omarchy-fizzy.git
-less ~/.config/omarchy/plugins/lonbaker.fizzy/README.md
-omarchy plugin enable lonbaker.fizzy --section right
+less ~/.config/omarchy/plugins/gigasolo.fizzy/README.md
+omarchy plugin enable gigasolo.fizzy --section right
 ```
 
 ## First-time setup
@@ -79,8 +79,8 @@ The plugin uses the CLI's current login only. Multiple Fizzy accounts are not su
 ## Update and remove
 
 ```sh
-omarchy plugin update lonbaker.fizzy
-omarchy plugin remove lonbaker.fizzy
+omarchy plugin update gigasolo.fizzy
+omarchy plugin remove gigasolo.fizzy
 ```
 
 `omarchy plugin update` shows the diff and fast-forwards the git checkout. Removing the plugin does not log you out of Fizzy.
@@ -111,7 +111,7 @@ fizzy notification read-all --json
 
 ```sh
 omarchy plugin list | grep fizzy
-omarchy plugin enable lonbaker.fizzy --section right
+omarchy plugin enable gigasolo.fizzy --section right
 ```
 
 **The panel says the CLI is not installed.** Click **Install Fizzy CLI**, or run `omarchy pkg aur add fizzy-cli` yourself.
