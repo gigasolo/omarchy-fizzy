@@ -224,6 +224,89 @@ function openUrl(item) {
   return String(item.cardUrl || item.url || "")
 }
 
+function cardLink(item) {
+  return openUrl(item)
+}
+
+function parseCard(raw) {
+  var result = parseJson(raw)
+  if (!result.ok) return { ok: false, error: result.error, card: null }
+
+  var data = result.value.data || result.value
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ok: false, error: "The Fizzy CLI returned no card", card: null }
+  }
+
+  var board = data.board || {}
+  var number = positiveInteger(data.number, 0)
+  return {
+    ok: true,
+    error: "",
+    card: {
+      id: String(data.id || ""),
+      number: number,
+      title: cleanText(data.title || "Fizzy card"),
+      url: String(data.url || ""),
+      description: cleanText(data.description || ""),
+      boardName: cleanText(board.name || "")
+    }
+  }
+}
+
+function parseComments(raw, limit) {
+  var result = parseJson(raw)
+  if (!result.ok) return { ok: false, error: result.error, items: [] }
+
+  var data = result.value.data
+  var source = []
+  if (Array.isArray(data)) source = data
+  else if (data && Array.isArray(data.comments)) source = data.comments
+
+  var items = []
+  for (var i = 0; i < source.length; i++) {
+    var comment = source[i] || {}
+    var id = String(comment.id || "").trim()
+    if (id === "") continue
+    var body = comment.body || {}
+    var text = cleanText(body.plain_text || body.html || comment.body || "")
+    var timestamp = String(comment.created_at || "")
+    var parsedTime = Date.parse(timestamp)
+    if (!isFinite(parsedTime)) parsedTime = 0
+    items.push({
+      id: id,
+      text: text,
+      creator: cleanText(comment.creator && comment.creator.name ? comment.creator.name : ""),
+      timestamp: timestamp,
+      timestampMs: parsedTime
+    })
+  }
+
+  var count = positiveInteger(limit, 8)
+  if (items.length > count) items = items.slice(items.length - count)
+  return { ok: true, error: "", items: items }
+}
+
+function agentExcerpt(item, peek) {
+  if (peek && cleanText(peek.description)) return cleanText(peek.description)
+  if (!item) return ""
+  return cleanText(item.excerpt || "")
+}
+
+function agentPrompt(item, peek) {
+  var url = cardLink(item)
+  var title = item ? cleanText(item.title || "") : ""
+  var board = item ? cleanText(item.boardName || "") : ""
+  if (peek && peek.boardName) board = cleanText(peek.boardName)
+  var excerpt = agentExcerpt(item, peek)
+  if (excerpt.length > 400) excerpt = excerpt.substring(0, 397) + "…"
+
+  var lines = ["Look at this Fizzy card: " + (url || "(no url)")]
+  if (title !== "") lines.push("", title)
+  if (board !== "") lines.push(board)
+  if (excerpt !== "") lines.push("", excerpt)
+  return lines.join("\n")
+}
+
 function parseThemeColors(raw) {
   var lines = String(raw || "").split("\n")
   var colors = {}
@@ -303,6 +386,10 @@ if (typeof module !== "undefined") {
     filterNotifications: filterNotifications,
     unreadCount: unreadCount,
     openUrl: openUrl,
+    cardLink: cardLink,
+    parseCard: parseCard,
+    parseComments: parseComments,
+    agentPrompt: agentPrompt,
     parseThemeColors: parseThemeColors,
     notificationTypeIcon: notificationTypeIcon,
     notificationMeta: notificationMeta,

@@ -2,7 +2,7 @@
 
 Unread [Fizzy](https://fizzy.do) notifications in your [Omarchy](https://omarchy.org/) bar.
 
-[![Version 1.0.0](https://img.shields.io/github/v/release/gigasolo/omarchy-fizzy?label=version)](https://github.com/gigasolo/omarchy-fizzy/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/github/v/release/gigasolo/omarchy-fizzy?label=version)](https://github.com/gigasolo/omarchy-fizzy/releases)
 [![License: MIT](https://img.shields.io/github/license/gigasolo/omarchy-fizzy)](LICENSE)
 [![Omarchy 4](https://img.shields.io/badge/omarchy-4%20Quattro-informational)](https://omarchy.org/)
 
@@ -12,7 +12,7 @@ Unread [Fizzy](https://fizzy.do) notifications in your [Omarchy](https://omarchy
 
 Click the mark to open a keyboard-friendly tray, open a card in the browser, and mark it read. If the Fizzy CLI is not installed or you have not signed in yet, the panel shows how to finish setup.
 
-This is **version 1.0.0**, the first stable release. It is an independent MIT-licensed plugin for Omarchy 4 (Quattro) and is not affiliated with or endorsed by 37signals.
+This is an independent MIT-licensed plugin for Omarchy 4 (Quattro). It is not affiliated with or endorsed by 37signals.
 
 ## Install
 
@@ -69,10 +69,14 @@ The plugin uses the CLI's current login only. Multiple Fizzy accounts are not su
 | Open or close the panel | Left-click the mark |
 | Refresh now | Right-click or middle-click, or press `r` |
 | Move | `j` / `k` or the arrow keys |
-| Open the selected card | Enter |
+| Open the selected card in the browser | Enter |
+| Peek at the card and comments | Space |
+| Copy card link | `c` |
+| Send the card to your Omarchy agent | `a` |
+| Mark the **card** as read | `k` |
 | Install or sign in | Click the setup card, or press `s` |
 | Unread / previous | `u` / `p` |
-| Mark all read | `m` |
+| Mark all **notifications** read | `m` |
 | Close | Escape |
 | Next bar panel | Tab |
 
@@ -103,6 +107,9 @@ fizzy identity show --json
 fizzy notification list --json
 fizzy notification read <id> --json
 fizzy notification read-all --json
+fizzy card show <number> --json
+fizzy card mark-read <number> --json
+fizzy comment list --card <number> --json
 ```
 
 ## If something is wrong

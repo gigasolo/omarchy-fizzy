@@ -247,6 +247,90 @@ test("openUrl prefers the card URL", () => {
   }), "https://app.fizzy.do/acct/notifications/abc")
 })
 
+test("cardLink copies the card URL, falling back to the notification URL", () => {
+  assert.equal(Model.cardLink({
+    cardUrl: "https://app.fizzy.do/6101773/cards/557",
+    url: "https://app.fizzy.do/6101773/notifications/n1"
+  }), "https://app.fizzy.do/6101773/cards/557")
+  assert.equal(Model.cardLink({
+    cardUrl: "",
+    url: "https://app.fizzy.do/6101773/notifications/n1"
+  }), "https://app.fizzy.do/6101773/notifications/n1")
+  assert.equal(Model.cardLink(null), "")
+})
+
+test("parseCard extracts description and board from card show JSON", () => {
+  const result = Model.parseCard(envelope({
+    id: "03gs9gzg6h5izhp52wq35yccu",
+    number: 557,
+    title: "Assistant Call Limits",
+    url: "https://app.fizzy.do/6101773/cards/557",
+    description: "Incident (folded from #555): Marketing DID showing dead air.",
+    description_html: "<p>Incident (folded from #555)</p>",
+    board: { name: "AI Agents & Tools" }
+  }))
+
+  assert.equal(result.ok, true)
+  assert.equal(result.card.number, 557)
+  assert.equal(result.card.title, "Assistant Call Limits")
+  assert.equal(result.card.boardName, "AI Agents & Tools")
+  assert.match(result.card.description, /dead air/i)
+  assert.equal(result.card.url, "https://app.fizzy.do/6101773/cards/557")
+})
+
+test("parseComments keeps the newest comments as plain text", () => {
+  const comments = []
+  for (let i = 1; i <= 10; i++) {
+    comments.push({
+      id: "c" + i,
+      created_at: "2026-08-0" + Math.min(i, 9) + "T12:00:00.000Z",
+      body: { plain_text: "Note " + i, html: "<p>Note " + i + "</p>" },
+      creator: { name: "Ada" }
+    })
+  }
+  const result = Model.parseComments(envelope(comments), 8)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.items.length, 8)
+  assert.equal(result.items[0].text, "Note 3")
+  assert.equal(result.items[7].text, "Note 10")
+  assert.equal(result.items[0].creator, "Ada")
+})
+
+test("parseComments strips html when plain_text is missing", () => {
+  const result = Model.parseComments(envelope([
+    { id: "c1", created_at: "2026-08-12T12:00:00.000Z", body: { html: "<p>Looks <strong>good</strong></p>" }, creator: { name: "Jay" } }
+  ]), 8)
+
+  assert.equal(result.items[0].text, "Looks good")
+})
+
+test("agentPrompt includes the card URL, title, and excerpt", () => {
+  const prompt = Model.agentPrompt({
+    title: "Assistant Call Limits",
+    boardName: "AI Agents & Tools",
+    excerpt: "Dead air on marketing DIDs",
+    cardUrl: "https://app.fizzy.do/6101773/cards/557",
+    url: "https://app.fizzy.do/6101773/notifications/n1"
+  }, null)
+
+  assert.match(prompt, /https:\/\/app\.fizzy\.do\/6101773\/cards\/557/)
+  assert.match(prompt, /Assistant Call Limits/)
+  assert.match(prompt, /Dead air/)
+  assert.match(prompt, /AI Agents & Tools/)
+})
+
+test("agentPrompt prefers a loaded peek description over the notification excerpt", () => {
+  const prompt = Model.agentPrompt({
+    title: "Assistant Call Limits",
+    excerpt: "short ping",
+    cardUrl: "https://app.fizzy.do/6101773/cards/557"
+  }, { description: "Full incident writeup about idle timeouts." })
+
+  assert.match(prompt, /Full incident writeup/)
+  assert.doesNotMatch(prompt, /short ping/)
+})
+
 test("notificationMeta includes time, creator, and board", () => {
   const item = {
     timestampMs: Date.parse("2026-08-12T19:09:07.279Z"),

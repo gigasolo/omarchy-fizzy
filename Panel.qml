@@ -15,8 +15,11 @@ Panel {
 
   property int selectedIndex: 0
   property bool cursorActive: false
+  property bool peeking: false
+  property bool enterHandled: false
   property double nowMs: Date.now()
   property string stateFilter: "unread"
+  readonly property var selectedItem: filteredNotifications.length > 0 ? filteredNotifications[selectedIndex] : null
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -72,6 +75,8 @@ Panel {
   }
 
   function setStateFilter(value) {
+    peeking = false
+    service.closePeek()
     stateFilter = String(value || "unread")
     selectedIndex = 0
     cursorActive = false
@@ -91,6 +96,7 @@ Panel {
     cursorActive = true
     selectedIndex = Math.max(0, Math.min(filteredNotifications.length - 1, index))
     scrollSelectionIntoView()
+    if (peeking && filteredNotifications[selectedIndex]) service.loadPeek(filteredNotifications[selectedIndex])
   }
 
   function moveSelection(delta) {
@@ -108,8 +114,45 @@ Panel {
       service.beginSetup()
       return
     }
-    if (!cursorActive || filteredNotifications.length === 0) return
-    service.openNotification(filteredNotifications[selectedIndex])
+    if (!cursorActive || !selectedItem) return
+    service.openNotification(selectedItem)
+  }
+
+  function togglePeek() {
+    if (root.needsSetup || !selectedItem) return
+    if (peeking) {
+      peeking = false
+      service.closePeek()
+      return
+    }
+    if (!cursorActive) select(selectedIndex)
+    peeking = true
+    service.loadPeek(selectedItem)
+  }
+
+  function closePeekOrPanel() {
+    if (peeking) {
+      peeking = false
+      service.closePeek()
+      return
+    }
+    root.close()
+  }
+
+  function copySelected() {
+    if (!selectedItem) return
+    service.copyCardLink(selectedItem)
+  }
+
+  function sendSelectedToAgent() {
+    if (!selectedItem) return
+    service.sendToAgent(selectedItem)
+    root.close()
+  }
+
+  function markSelectedCardRead() {
+    if (!selectedItem) return
+    service.markCardRead(selectedItem)
   }
 
   function scrollSelectionIntoView() {
@@ -134,10 +177,15 @@ Panel {
 
   onOpenedChanged: if (opened) {
     cursorActive = false
+    peeking = false
+    enterHandled = false
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
     service.refreshIfStale()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  } else {
+    peeking = false
+    service.closePeek()
   }
 
   onFilteredNotificationsChanged: ensureSelection()
@@ -277,8 +325,18 @@ Panel {
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) root.moveSelection(dy)
       }
-      onActivateRequested: root.activateSelection()
-      onCloseRequested: root.close()
+      onReturnRequested: {
+        root.enterHandled = true
+        root.activateSelection()
+      }
+      onActivateRequested: {
+        if (root.enterHandled) {
+          root.enterHandled = false
+          return
+        }
+        root.togglePeek()
+      }
+      onCloseRequested: root.closePeekOrPanel()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r" || text === "R") service.refresh()
@@ -286,6 +344,9 @@ Panel {
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
         else if (text === "m" || text === "M") service.markAllRead()
+        else if (text === "c" || text === "C") root.copySelected()
+        else if (text === "a" || text === "A") root.sendSelectedToAgent()
+        else if (text === "k" || text === "K") root.markSelectedCardRead()
       }
 
       ColumnLayout {
@@ -410,7 +471,7 @@ Panel {
             }
 
             Text {
-              visible: !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.peeking && !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
               width: parent.width
               text: root.emptyMessage()
               color: root.dim
@@ -422,7 +483,7 @@ Panel {
             }
 
             Text {
-              visible: !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
+              visible: !root.peeking && !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
               width: parent.width
               text: service.lastError
               color: root.urgent
@@ -434,9 +495,14 @@ Panel {
               bottomPadding: Style.space(18)
             }
 
+            PeekView {
+              visible: root.peeking && !root.needsSetup
+              width: parent.width
+            }
+
             Column {
               id: notificationColumn
-              visible: !root.needsSetup && root.filteredNotifications.length > 0
+              visible: !root.peeking && !root.needsSetup && root.filteredNotifications.length > 0
               width: parent.width
               spacing: Style.space(8)
 
@@ -560,11 +626,164 @@ Panel {
                         font.bold: true
                       }
                     }
+
+                    PanelActionButton {
+                      iconText: "󰆏"
+                      tooltipText: "Copy card link"
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      Layout.alignment: Qt.AlignVCenter
+                      onClicked: service.copyCardLink(notificationRow.modelData)
+                    }
                   }
                 }
               }
             }
           }
+        }
+      }
+    }
+  }
+
+  component PeekView: Column {
+    width: parent ? parent.width : implicitWidth
+    spacing: Style.space(10)
+
+    readonly property var peek: service.peek
+    readonly property var card: peek && peek.card ? peek.card : null
+
+    RowLayout {
+      width: parent.width
+      spacing: Style.space(8)
+
+      Button {
+        text: "BACK"
+        foreground: root.foreground
+        background: "transparent"
+        accent: Color.accent
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        horizontalPadding: Style.space(7)
+        verticalPadding: Style.space(1)
+        onClicked: root.togglePeek()
+      }
+
+      Item { Layout.fillWidth: true }
+
+      PanelActionButton {
+        iconText: "󰆏"
+        tooltipText: "Copy card link"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.copySelected()
+      }
+
+      PanelActionButton {
+        iconText: "󰚩"
+        tooltipText: "Send to agent"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.sendSelectedToAgent()
+      }
+
+      PanelActionButton {
+        iconText: "󰡕"
+        tooltipText: "Mark card as read"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.markSelectedCardRead()
+      }
+    }
+
+    Text {
+      width: parent.width
+      text: card ? card.title : (peek && peek.title ? peek.title : "Card")
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+      font.weight: Font.DemiBold
+      wrapMode: Text.WordWrap
+    }
+
+    Text {
+      visible: card && card.boardName !== ""
+      width: parent.width
+      text: card ? card.boardName : ""
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      visible: peek && peek.loading
+      width: parent.width
+      text: "Loading card…"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    Text {
+      visible: peek && peek.error !== ""
+      width: parent.width
+      text: peek ? peek.error : ""
+      color: root.urgent
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.WordWrap
+    }
+
+    Text {
+      visible: card && card.description !== ""
+      width: parent.width
+      text: card ? card.description : ""
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.Wrap
+      maximumLineCount: 12
+      elide: Text.ElideRight
+    }
+
+    PanelSeparator {
+      visible: peek && peek.comments && peek.comments.length > 0
+      foreground: root.foreground
+    }
+
+    Text {
+      visible: peek && !peek.loading && peek.comments && peek.comments.length === 0 && peek.error === ""
+      width: parent.width
+      text: "No comments yet."
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Repeater {
+      model: peek && peek.comments ? peek.comments : []
+
+      Column {
+        required property var modelData
+        width: parent.width
+        spacing: Style.space(2)
+
+        Text {
+          width: parent.width
+          text: Model.notificationMeta({ timestampMs: modelData.timestampMs, creator: modelData.creator }, root.nowMs)
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
+          text: modelData.text
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.Wrap
+          maximumLineCount: 6
+          elide: Text.ElideRight
         }
       }
     }

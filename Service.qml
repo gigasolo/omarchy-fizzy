@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "Model.js" as Model
 
 Item {
@@ -33,6 +34,16 @@ Item {
   property string _readOutput: ""
   property string _readError: ""
   property bool _readAll: false
+  property var peek: null
+  property var _peekCache: ({})
+  property var _peekItem: null
+  property int _peekCardNumber: 0
+  property string _cardShowOutput: ""
+  property string _cardShowError: ""
+  property string _commentOutput: ""
+  property string _commentError: ""
+  property string _cardReadOutput: ""
+  property string _cardReadError: ""
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -121,6 +132,84 @@ Item {
     var url = Model.openUrl(item)
     if (url) Qt.openUrlExternally(url)
     if (item.unread) markRead(item)
+  }
+
+  function copyCardLink(item) {
+    var url = Model.cardLink(item)
+    if (url === "") {
+      actionStatus = "No card link to copy"
+      actionStatusTimer.restart()
+      return
+    }
+    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(url) + " | wl-copy"])
+    actionStatus = "Copied card link"
+    actionStatusTimer.restart()
+  }
+
+  function sendToAgent(item) {
+    if (!item) return
+    var peekCard = peek && peek.cardNumber === item.cardNumber ? peek.card : null
+    var prompt = Model.agentPrompt(item, peekCard)
+    Quickshell.execDetached(["omarchy-agent-prompt", prompt])
+    actionStatus = "Opened in agent"
+    actionStatusTimer.restart()
+  }
+
+  function markCardRead(item) {
+    if (!item || !item.cardNumber || cardReadProcess.running) return
+    _cardReadOutput = ""
+    _cardReadError = ""
+    actionStatusTimer.stop()
+    actionStatus = "Marking card as read…"
+    cardReadProcess.command = ["fizzy", "card", "mark-read", String(item.cardNumber), "--json"]
+    cardReadProcess.running = true
+  }
+
+  function closePeek() {
+    peek = null
+    _peekItem = null
+    _peekCardNumber = 0
+  }
+
+  function loadPeek(item) {
+    if (!item) return
+    var number = Number(item.cardNumber || 0)
+    if (!number) {
+      peek = { loading: false, error: "This notification has no card", card: null, comments: [], cardNumber: 0 }
+      return
+    }
+    _peekItem = item
+    _peekCardNumber = number
+    var cached = _peekCache[String(number)]
+    if (cached) {
+      peek = cached
+      if (item.unread) markRead(item)
+      return
+    }
+    peek = {
+      loading: true,
+      error: "",
+      card: null,
+      comments: [],
+      cardNumber: number,
+      title: item.title,
+      boardName: item.boardName
+    }
+    if (item.unread) markRead(item)
+    _cardShowOutput = ""
+    _cardShowError = ""
+    cardShowProcess.command = ["fizzy", "card", "show", String(number), "--json"]
+    cardShowProcess.running = true
+  }
+
+  function cachePeek(nextPeek) {
+    peek = nextPeek
+    if (nextPeek && nextPeek.cardNumber) {
+      var cache = {}
+      for (var key in _peekCache) cache[key] = _peekCache[key]
+      cache[String(nextPeek.cardNumber)] = nextPeek
+      _peekCache = cache
+    }
   }
 
   function markRead(item) {
@@ -334,6 +423,125 @@ Item {
       var stdout = String(readStdout.text || root._readOutput || "")
       var stderr = String(readStderr.text || root._readError || "")
       root.finishRead(exitCode, stdout, stderr)
+    }
+  }
+
+  Process {
+    id: cardShowProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: cardShowStdout
+      waitForEnd: true
+      onStreamFinished: root._cardShowOutput = text
+    }
+    stderr: StdioCollector {
+      id: cardShowStderr
+      waitForEnd: true
+      onStreamFinished: root._cardShowError = text
+    }
+    onExited: function(exitCode) {
+      var stdout = String(cardShowStdout.text || root._cardShowOutput || "")
+      var stderr = String(cardShowStderr.text || root._cardShowError || "")
+      if (exitCode !== 0) {
+        root.peek = {
+          loading: false,
+          error: root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not load the card")),
+          card: null,
+          comments: [],
+          cardNumber: root._peekCardNumber
+        }
+        return
+      }
+      var parsed = Model.parseCard(stdout)
+      if (!parsed.ok) {
+        root.peek = {
+          loading: false,
+          error: parsed.error,
+          card: null,
+          comments: [],
+          cardNumber: root._peekCardNumber
+        }
+        return
+      }
+      root.peek = {
+        loading: true,
+        error: "",
+        card: parsed.card,
+        comments: [],
+        cardNumber: root._peekCardNumber,
+        title: parsed.card.title,
+        boardName: parsed.card.boardName
+      }
+      root._commentOutput = ""
+      root._commentError = ""
+      commentListProcess.command = ["fizzy", "comment", "list", "--card", String(root._peekCardNumber), "--json"]
+      commentListProcess.running = true
+    }
+  }
+
+  Process {
+    id: commentListProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: commentListStdout
+      waitForEnd: true
+      onStreamFinished: root._commentOutput = text
+    }
+    stderr: StdioCollector {
+      id: commentListStderr
+      waitForEnd: true
+      onStreamFinished: root._commentError = text
+    }
+    onExited: function(exitCode) {
+      var stdout = String(commentListStdout.text || root._commentOutput || "")
+      var stderr = String(commentListStderr.text || root._commentError || "")
+      var card = root.peek && root.peek.card ? root.peek.card : null
+      var comments = []
+      var error = ""
+      if (exitCode !== 0) error = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not load comments"))
+      else {
+        var parsed = Model.parseComments(stdout, 8)
+        if (!parsed.ok) error = parsed.error
+        else comments = parsed.items
+      }
+      root.cachePeek({
+        loading: false,
+        error: error,
+        card: card,
+        comments: comments,
+        cardNumber: root._peekCardNumber,
+        title: card ? card.title : "",
+        boardName: card ? card.boardName : ""
+      })
+    }
+  }
+
+  Process {
+    id: cardReadProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      id: cardReadStdout
+      waitForEnd: true
+      onStreamFinished: root._cardReadOutput = text
+    }
+    stderr: StdioCollector {
+      id: cardReadStderr
+      waitForEnd: true
+      onStreamFinished: root._cardReadError = text
+    }
+    onExited: function(exitCode) {
+      var stdout = String(cardReadStdout.text || root._cardReadOutput || "")
+      var stderr = String(cardReadStderr.text || root._cardReadError || "")
+      if (exitCode !== 0) {
+        root.lastError = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not mark the card as read"))
+        root.actionStatus = root.lastError
+      } else {
+        root.actionStatus = "Marked card as read"
+      }
+      actionStatusTimer.restart()
     }
   }
 }
