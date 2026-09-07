@@ -73,10 +73,11 @@ The plugin uses the CLI's current login only. Multiple Fizzy accounts are not su
 | Peek at the card and comments | Space |
 | Copy card link | `c` |
 | Send the card to your Omarchy agent | `a` |
-| Mark the **card** as read | `k` |
+| Mark this as read | `m` |
+| Mark all notifications read | `M` |
+| Shortcuts | `?` or the help button |
 | Install or sign in | Click the setup card, or press `s` |
 | Unread / previous | `u` / `p` |
-| Mark all **notifications** read | `m` |
 | Close | Escape |
 | Next bar panel | Tab |
 

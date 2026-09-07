@@ -16,6 +16,7 @@ Panel {
   property int selectedIndex: 0
   property bool cursorActive: false
   property bool peeking: false
+  property bool showingHelp: false
   property bool enterHandled: false
   property double nowMs: Date.now()
   property string stateFilter: "unread"
@@ -29,6 +30,19 @@ Panel {
   readonly property bool needsSetup: service.setupKind !== ""
   readonly property var setupGuide: Model.setupGuide(service.setupKind)
   readonly property color barIconColor: service.unreadCount > 0 ? urgent : (service.authenticated ? barForeground : Qt.darker(barForeground, 1.55))
+  readonly property var shortcutHelp: [
+    { keys: "j k", action: "Move" },
+    { keys: "Enter", action: "Open in browser" },
+    { keys: "Space", action: "Peek at the card" },
+    { keys: "c", action: "Copy card link" },
+    { keys: "a", action: "Send to agent" },
+    { keys: "m", action: "Mark this as read" },
+    { keys: "M", action: "Mark all notifications read" },
+    { keys: "u p", action: "Unread / previous" },
+    { keys: "r", action: "Refresh" },
+    { keys: "?", action: "Show or hide shortcuts" },
+    { keys: "Esc", action: "Back / close" }
+  ]
 
   property int phraseIndex: 0
   readonly property var loadingPhrases: [
@@ -75,6 +89,7 @@ Panel {
   }
 
   function setStateFilter(value) {
+    showingHelp = false
     peeking = false
     service.closePeek()
     stateFilter = String(value || "unread")
@@ -109,6 +124,7 @@ Panel {
   }
 
   function activateSelection() {
+    if (showingHelp) return
     if (root.needsSetup) {
       if (!cursorActive) return
       service.beginSetup()
@@ -119,7 +135,7 @@ Panel {
   }
 
   function togglePeek() {
-    if (root.needsSetup || !selectedItem) return
+    if (showingHelp || root.needsSetup || !selectedItem) return
     if (peeking) {
       peeking = false
       service.closePeek()
@@ -131,6 +147,10 @@ Panel {
   }
 
   function closePeekOrPanel() {
+    if (showingHelp) {
+      showingHelp = false
+      return
+    }
     if (peeking) {
       peeking = false
       service.closePeek()
@@ -140,19 +160,24 @@ Panel {
   }
 
   function copySelected() {
-    if (!selectedItem) return
+    if (showingHelp || !selectedItem) return
     service.copyCardLink(selectedItem)
   }
 
   function sendSelectedToAgent() {
-    if (!selectedItem) return
+    if (showingHelp || !selectedItem) return
     service.sendToAgent(selectedItem)
     root.close()
   }
 
-  function markSelectedCardRead() {
-    if (!selectedItem) return
-    service.markCardRead(selectedItem)
+  function markSelectedRead() {
+    if (showingHelp || !selectedItem) return
+    if (selectedItem.unread) service.markRead(selectedItem)
+    if (selectedItem.cardNumber) service.markCardRead(selectedItem)
+  }
+
+  function toggleHelp() {
+    showingHelp = !showingHelp
   }
 
   function scrollSelectionIntoView() {
@@ -178,6 +203,7 @@ Panel {
   onOpenedChanged: if (opened) {
     cursorActive = false
     peeking = false
+    showingHelp = false
     enterHandled = false
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
@@ -343,10 +369,11 @@ Panel {
         else if ((text === "s" || text === "S") && root.needsSetup) service.beginSetup()
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
-        else if (text === "m" || text === "M") service.markAllRead()
+        else if (text === "m") root.markSelectedRead()
+        else if (text === "M") service.markAllRead()
         else if (text === "c" || text === "C") root.copySelected()
         else if (text === "a" || text === "A") root.sendSelectedToAgent()
-        else if (text === "k" || text === "K") root.markSelectedCardRead()
+        else if (text === "?") root.toggleHelp()
       }
 
       ColumnLayout {
@@ -361,7 +388,7 @@ Panel {
 
           Item {
             width: parent.width
-            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, refreshButton.implicitHeight)
+            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, helpButton.implicitHeight, refreshButton.implicitHeight)
 
             FizzyIcon {
               id: heroIcon
@@ -375,7 +402,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: refreshButton.left
+              anchors.right: helpButton.left
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -398,6 +425,18 @@ Panel {
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
               }
+            }
+
+            PanelActionButton {
+              id: helpButton
+              anchors.right: refreshButton.left
+              anchors.rightMargin: Style.space(2)
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "?"
+              tooltipText: "Shortcuts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleHelp()
             }
 
             PanelActionButton {
@@ -466,12 +505,12 @@ Panel {
             spacing: Style.space(12)
 
             SetupCard {
-              visible: root.needsSetup
+              visible: !root.showingHelp && root.needsSetup
               width: parent.width
             }
 
             Text {
-              visible: !root.peeking && !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.showingHelp && !root.peeking && !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
               width: parent.width
               text: root.emptyMessage()
               color: root.dim
@@ -483,7 +522,7 @@ Panel {
             }
 
             Text {
-              visible: !root.peeking && !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
+              visible: !root.showingHelp && !root.peeking && !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
               width: parent.width
               text: service.lastError
               color: root.urgent
@@ -495,14 +534,19 @@ Panel {
               bottomPadding: Style.space(18)
             }
 
+            HelpView {
+              visible: root.showingHelp
+              width: parent.width
+            }
+
             PeekView {
-              visible: root.peeking && !root.needsSetup
+              visible: !root.showingHelp && root.peeking && !root.needsSetup
               width: parent.width
             }
 
             Column {
               id: notificationColumn
-              visible: !root.peeking && !root.needsSetup && root.filteredNotifications.length > 0
+              visible: !root.showingHelp && !root.peeking && !root.needsSetup && root.filteredNotifications.length > 0
               width: parent.width
               spacing: Style.space(8)
 
@@ -645,6 +689,46 @@ Panel {
     }
   }
 
+  component HelpView: Column {
+    width: parent ? parent.width : implicitWidth
+    spacing: Style.space(8)
+
+    Text {
+      width: parent.width
+      text: "SHORTCUTS"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+    }
+
+    Repeater {
+      model: root.shortcutHelp
+
+      Row {
+        required property var modelData
+        width: parent.width
+        spacing: Style.space(12)
+
+        Text {
+          width: Style.space(90)
+          text: modelData.keys
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+        }
+
+        Text {
+          text: modelData.action
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+    }
+  }
+
   component PeekView: Column {
     width: parent ? parent.width : implicitWidth
     spacing: Style.space(10)
@@ -688,10 +772,10 @@ Panel {
 
       PanelActionButton {
         iconText: "󰡕"
-        tooltipText: "Mark card as read"
+        tooltipText: "Mark as read"
         foreground: root.foreground
         fontFamily: root.fontFamily
-        onClicked: root.markSelectedCardRead()
+        onClicked: root.markSelectedRead()
       }
     }
 
