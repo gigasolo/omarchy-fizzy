@@ -10,11 +10,11 @@ It runs:
 
 ```
 fizzy identity show --json
-fizzy notification list --json
+fizzy notification list --limit <maxItems> --json
 fizzy notification read <id> --json
 fizzy notification read-all --json
 fizzy card show <number> --json
-fizzy comment list --card <number> --json
+fizzy comment list --card <number> --limit 8 --json
 ```
 
 Copy and agent handoff, on an explicit keypress or button:

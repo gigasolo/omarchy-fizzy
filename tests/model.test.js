@@ -549,3 +549,17 @@ test("emptyList is a stable empty array for QML bindings", () => {
   assert.equal(Model.emptyList(), Model.emptyList())
   assert.deepEqual(Model.emptyList(), [])
 })
+
+test("commentListLimit is the peek comment cap", () => {
+  assert.equal(Model.commentListLimit(), 8)
+})
+
+test("copyWith copies instead of mutating", () => {
+  const src = { id: "a", unread: true, title: "A" }
+  const next = Model.copyWith(src, { unread: false, unreadCount: 0 })
+  assert.equal(src.unread, true)
+  assert.equal(next.unread, false)
+  assert.equal(next.unreadCount, 0)
+  assert.equal(next.id, "a")
+  assert.equal(next.title, "A")
+})

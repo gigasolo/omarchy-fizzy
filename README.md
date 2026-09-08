@@ -114,7 +114,7 @@ The plugin only runs these local commands. It never sends a token on the command
 
 ```
 fizzy identity show --json
-fizzy notification list --json
+fizzy notification list --limit <maxItems> --json
 fizzy notification read <id> --json
 fizzy notification read-all --json
 fizzy card show <number> --json

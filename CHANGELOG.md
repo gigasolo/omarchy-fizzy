@@ -49,6 +49,16 @@ inbox, not every new card on the board. Older is pings you have already seen.
 - A vanished binary after a successful probe shows a timeout, not a hang.
 - Late `SIGTERM` from a killed probe cannot cancel a newer recovery.
 - Peeking no longer dismisses the row from New for you.
+- Marking a peeked ping read hides the check and does not queue a second
+  `fizzy notification read`. A failed CLI read restores the check so `m`
+  retries while still peeking.
+- A peek timeout cannot cache a partial card, fail the card you already
+  moved to, or leave a leftover timer after a cached peek. A late
+  `onExited` is ignored by generation, like the CLI probe.
+- A list refresh cannot unhide the peek check after a successful mark-read.
+  Only a failed CLI read restores it. Failed `read-all` restores the peeked
+  row's prior unread state (Older + `M` does not force the check on).
+- Notification list asks the CLI for `--limit` matching `maxItems`.
 - Card URLs must be `https` on `*.fizzy.do` before they are copied, opened,
   or sent to the agent.
 - Copyright is GigaSolo LLC.

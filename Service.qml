@@ -53,6 +53,12 @@ Item {
   property var _pendingPeekItem: null
   property bool _peekAbandoned: false
   property int _peekCardNumber: 0
+  property int _peekGen: 0
+  property int _cardShowGen: 0
+  property int _commentGen: 0
+  property int _peekLive: 0
+  property var _notificationsBeforeAll: null
+  property bool _peekUnreadBeforeAll: false
   property string _cardShowOutput: ""
   property string _cardShowError: ""
   property bool _cardShowOverflow: false
@@ -85,6 +91,8 @@ Item {
     if (result.overflow) {
       overflowFlagSetter()
       stopProcess(proc)
+      // stopProcess may run onExited now; do not restash the truncated buffer.
+      return ""
     }
     return result.text
   }
@@ -154,7 +162,7 @@ Item {
     _listOutput = ""
     _listError = ""
     _listOverflow = false
-    listProcess.command = ["fizzy", "notification", "list", "--json"]
+    listProcess.command = ["fizzy", "notification", "list", "--limit", String(root.maxItems), "--json"]
     listProcess.running = true
     probeWatchdog.restart()
   }
@@ -228,6 +236,7 @@ Item {
     refreshing = false
     lastUpdated = new Date()
     probeWatchdog.stop()
+    syncPeekItemFromNotifications()
   }
 
   function openNotification(item) {
@@ -263,7 +272,34 @@ Item {
     return true
   }
 
+  function dropPeekIO() {
+    _cardShowOutput = ""
+    _cardShowError = ""
+    _commentOutput = ""
+    _commentError = ""
+    _cardShowOverflow = false
+    _commentOverflow = false
+  }
+
+  function beginPeekGen() {
+    _peekGen += 1
+    return _peekGen
+  }
+
+  function peekCurrent(gen) {
+    return gen === _peekGen
+  }
+
+  function peekWait() {
+    return cardShowProcess.running || commentListProcess.running || _peekLive > 0
+  }
+
+  function notePeekExit() {
+    if (_peekLive > 0) _peekLive -= 1
+  }
+
   function closePeek() {
+    beginPeekGen()
     _peekAbandoned = true
     _pendingPeekItem = null
     peek = null
@@ -272,12 +308,14 @@ Item {
     peekWatchdog.stop()
     stopProcess(cardShowProcess)
     stopProcess(commentListProcess)
+    dropPeekIO()
   }
 
   function loadPeek(item) {
     if (!panelOpen || !item) return
-    if (cardShowProcess.running || commentListProcess.running) {
+    if (peekWait()) {
       _pendingPeekItem = item
+      peekWatchdog.restart()
       stopProcess(cardShowProcess)
       stopProcess(commentListProcess)
       return
@@ -287,9 +325,16 @@ Item {
 
   function beginPeek(item) {
     if (!panelOpen || !item) return
+    beginPeekGen()
     var number = Number(item.cardNumber || 0)
     if (!number || Model.safeCliToken(number) === "") {
+      _pendingPeekItem = null
+      _peekAbandoned = false
+      _peekItem = item
+      _peekCardNumber = 0
       peek = { loading: false, error: "This notification has no card", card: null, comments: [], cardNumber: 0 }
+      peekWatchdog.stop()
+      dropPeekIO()
       return
     }
     _pendingPeekItem = null
@@ -300,6 +345,7 @@ Item {
     if (cached) {
       peek = cached
       _peekCache = Model.peekCacheTouch(_peekCache, number, Model.peekCacheLimit())
+      peekWatchdog.stop()
       return
     }
     peek = {
@@ -314,18 +360,26 @@ Item {
     _cardShowOutput = ""
     _cardShowError = ""
     _cardShowOverflow = false
+    _cardShowGen = _peekGen
+    _peekLive += 1
     cardShowProcess.command = ["fizzy", "card", "show", Model.safeCliToken(number), "--json"]
     cardShowProcess.running = true
     peekWatchdog.restart()
   }
 
-  function drainPendingPeek() {
+  function takePendingPeek() {
+    var item = _pendingPeekItem
+    _pendingPeekItem = null
+    return item
+  }
+
+  function tryStartPendingPeek() {
     if (!panelOpen) {
       _pendingPeekItem = null
       return false
     }
-    var item = _pendingPeekItem
-    _pendingPeekItem = null
+    if (peekWait()) return false
+    var item = takePendingPeek()
     if (!item) return false
     beginPeek(item)
     return true
@@ -341,18 +395,73 @@ Item {
       cardNumber: _peekCardNumber
     }
     peekWatchdog.stop()
+    dropPeekIO()
   }
 
   function cachePeek(nextPeek) {
     peek = nextPeek
     peekWatchdog.stop()
+    dropPeekIO()
     if (!nextPeek || nextPeek.loading || nextPeek.error || !nextPeek.cardNumber) return
     _peekCache = Model.peekCachePut(_peekCache, nextPeek.cardNumber, nextPeek, Model.peekCacheLimit())
+  }
+
+  function readPending(id) {
+    var token = Model.safeCliToken(id)
+    if (token === "") return false
+    if (_readingNotification && String(_readingNotification.id) === token) return true
+    for (var i = 0; i < _readQueue.length; i++) {
+      if (String(_readQueue[i].id) === token) return true
+    }
+    return false
+  }
+
+  function applyPeekItemReadState(id, unread, unreadCount) {
+    if (!_peekItem) return
+    if (id !== undefined && id !== null && String(_peekItem.id) !== String(id)) return
+    var nextUnread = unread === true
+    var count = nextUnread ? Math.max(1, Number(unreadCount) || 1) : 0
+    _peekItem = Model.copyWith(_peekItem, { unread: nextUnread, unreadCount: count })
+  }
+
+  function markPeekItemRead(id) {
+    applyPeekItemReadState(id, false, 0)
+  }
+
+  function syncPeekItemFromNotifications() {
+    if (!_peekItem) return
+    if (_peekItem.unread !== true) return
+    var id = String(_peekItem.id || "")
+    if (id === "") return
+    var source = notifications
+    for (var i = 0; i < source.length; i++) {
+      var row = source[i]
+      if (row && String(row.id) === id) {
+        applyPeekItemReadState(id, row.unread === true, row.unreadCount)
+        return
+      }
+    }
+  }
+
+  function restoreNotification(item) {
+    if (!item || Model.safeCliToken(item.id) === "") return
+    var token = String(item.id)
+    var source = notifications
+    var changed = []
+    for (var i = 0; i < source.length; i++) {
+      var existing = source[i] || {}
+      if (String(existing.id) === token) changed.push(item)
+      else changed.push(existing)
+    }
+    notifications = changed
+    unreadCount = Model.unreadCount(notifications)
+    applyPeekItemReadState(token, item.unread === true, item.unreadCount)
   }
 
   function markRead(item) {
     if (!item || !item.unread) return
     if (Model.safeCliToken(item.id) === "") return
+    if (readPending(item.id)) return
     setReadOptimistically(item)
     var queue = _readQueue.slice()
     queue.push(item)
@@ -362,8 +471,12 @@ Item {
 
   function markAllRead() {
     if (unreadCount === 0 || readProcess.running) return
+    _notificationsBeforeAll = notifications
+    _peekUnreadBeforeAll = !!(_peekItem && _peekItem.unread)
     notifications = Model.withAllRead(notifications)
     unreadCount = 0
+    _readQueue = []
+    markPeekItemRead()
     _readAll = true
     _readingNotification = null
     _readOutput = ""
@@ -379,6 +492,7 @@ Item {
   function setReadOptimistically(item) {
     notifications = Model.withItemRead(notifications, item.id)
     unreadCount = Model.unreadCount(notifications)
+    markPeekItemRead(item.id)
   }
 
   function runNextRead() {
@@ -415,20 +529,37 @@ Item {
     if (!actionBusy()) actionWatchdog.stop()
   }
 
-  function finishRead(exitCode, stdout, stderr) {
+  function finishRead(exitCode, stdout, stderr, overflow) {
+    var failed = overflow || exitCode !== 0
+    var wasAll = _readAll
+    var reading = _readingNotification
     disarmActionWatchdog()
-    if (_readOverflow) {
+    if (overflow) {
       lastError = "Fizzy CLI output was too large"
       actionStatus = lastError
     } else if (exitCode !== 0) {
       lastError = conciseError(Model.friendlyCliError(stderr || stdout, "Could not mark the notification as read"))
       actionStatus = lastError
     } else {
-      actionStatus = _readAll ? "Marked all as read" : "Marked as read"
+      actionStatus = wasAll ? "Marked all as read" : "Marked as read"
     }
     actionStatusTimer.restart()
+    if (failed) {
+      if (wasAll) {
+        if (_notificationsBeforeAll) {
+          notifications = _notificationsBeforeAll
+          unreadCount = Model.unreadCount(notifications)
+        }
+        applyPeekItemReadState(undefined, _peekUnreadBeforeAll, _peekUnreadBeforeAll ? 1 : 0)
+      } else if (reading) restoreNotification(reading)
+    } else if (wasAll) markPeekItemRead()
+    else if (reading) markPeekItemRead(reading.id)
+    _notificationsBeforeAll = null
     _readingNotification = null
     _readAll = false
+    _readOutput = ""
+    _readError = ""
+    _readOverflow = false
     if (_readQueue.length > 0) runNextRead()
     else refreshAfterRead.restart()
   }
@@ -492,9 +623,19 @@ Item {
     interval: 8000
     repeat: false
     onTriggered: {
+      var number = root._peekCardNumber
+      var pending = root._pendingPeekItem
+      root._pendingPeekItem = null
+      root.beginPeekGen()
+      root._peekAbandoned = true
       root.stopProcess(cardShowProcess)
       root.stopProcess(commentListProcess)
-      if (root.peek && root.peek.loading) root.failedPeek("Timed out loading the card")
+      if (root.peek && root.peek.loading && root._peekCardNumber === number)
+        root.failedPeek("Timed out loading the card")
+      if (pending && root.panelOpen) {
+        root._pendingPeekItem = pending
+        root.tryStartPendingPeek()
+      }
     }
   }
 
@@ -548,18 +689,24 @@ Item {
       }
     }
     onExited: function(exitCode) {
+      var stdout = root._identityOutput
+      var stderr = root._identityError
+      var overflow = root._identityOverflow
+      root._identityOutput = ""
+      root._identityError = ""
+      root._identityOverflow = false
       if (!root.probeCurrent(root._identityGen)) {
         root.tryRecoverWhich()
         return
       }
-      if (root._identityOverflow) {
+      if (overflow) {
         root._cliReady = false
         root.lastError = "Fizzy CLI output was too large"
         root.refreshing = false
         probeWatchdog.stop()
         return
       }
-      root.applyIdentityResult(root._identityOutput || root._identityError, exitCode)
+      root.applyIdentityResult(stdout || stderr, exitCode)
     }
   }
 
@@ -580,24 +727,30 @@ Item {
       }
     }
     onExited: function(exitCode) {
+      var stdout = root._listOutput
+      var stderr = root._listError
+      var overflow = root._listOverflow
+      root._listOutput = ""
+      root._listError = ""
+      root._listOverflow = false
       if (!root.probeCurrent(root._listGen)) {
         root.tryRecoverWhich()
         return
       }
-      if (root._listOverflow) {
+      if (overflow) {
         root.lastError = "Fizzy CLI output was too large"
         root.refreshing = false
         probeWatchdog.stop()
         return
       }
       if (exitCode !== 0) {
-        root.applyCliFailure(root._listError || root._listOutput, exitCode, "Could not list Fizzy notifications")
+        root.applyCliFailure(stderr || stdout, exitCode, "Could not list Fizzy notifications")
         root.refreshing = false
         probeWatchdog.stop()
         return
       }
 
-      var parsed = Model.parseNotifications(root._listOutput, root.maxItems)
+      var parsed = Model.parseNotifications(stdout, root.maxItems)
       if (!parsed.ok) {
         root.lastError = parsed.error
         root.refreshing = false
@@ -625,7 +778,13 @@ Item {
       }
     }
     onExited: function(exitCode) {
-      root.finishRead(exitCode, root._readOutput, root._readError)
+      var stdout = root._readOutput
+      var stderr = root._readError
+      var overflow = root._readOverflow
+      root._readOutput = ""
+      root._readError = ""
+      root._readOverflow = false
+      root.finishRead(exitCode, stdout, stderr, overflow)
     }
   }
 
@@ -646,17 +805,32 @@ Item {
       }
     }
     onExited: function(exitCode) {
-      if (root.drainPendingPeek()) return
-      if (root._peekAbandoned || !root.panelOpen || root._peekCardNumber === 0) return
-      if (root._cardShowOverflow) {
+      var stdout = root._cardShowOutput
+      var stderr = root._cardShowError
+      var overflow = root._cardShowOverflow
+      root._cardShowOutput = ""
+      root._cardShowError = ""
+      root._cardShowOverflow = false
+      root.notePeekExit()
+      if (!root.peekCurrent(root._cardShowGen)) {
+        root.tryStartPendingPeek()
+        return
+      }
+      if (!root.panelOpen) {
+        root._pendingPeekItem = null
+        return
+      }
+      if (root.tryStartPendingPeek()) return
+      if (root._peekCardNumber === 0) return
+      if (overflow) {
         root.failedPeek("Fizzy CLI output was too large")
         return
       }
       if (exitCode !== 0) {
-        root.failedPeek(Model.friendlyCliError(root._cardShowError || root._cardShowOutput, "Could not load the card"))
+        root.failedPeek(Model.friendlyCliError(stderr || stdout, "Could not load the card"))
         return
       }
-      var parsed = Model.parseCard(root._cardShowOutput)
+      var parsed = Model.parseCard(stdout)
       if (!parsed.ok) {
         root.failedPeek(parsed.error)
         return
@@ -673,7 +847,9 @@ Item {
       root._commentOutput = ""
       root._commentError = ""
       root._commentOverflow = false
-      commentListProcess.command = ["fizzy", "comment", "list", "--card", Model.safeCliToken(root._peekCardNumber), "--limit", "8", "--json"]
+      root._commentGen = root._peekGen
+      root._peekLive += 1
+      commentListProcess.command = ["fizzy", "comment", "list", "--card", Model.safeCliToken(root._peekCardNumber), "--limit", String(Model.commentListLimit()), "--json"]
       commentListProcess.running = true
       peekWatchdog.restart()
     }
@@ -696,15 +872,30 @@ Item {
       }
     }
     onExited: function(exitCode) {
-      if (root.drainPendingPeek()) return
-      if (root._peekAbandoned || !root.panelOpen || root._peekCardNumber === 0) return
+      var stdout = root._commentOutput
+      var stderr = root._commentError
+      var overflow = root._commentOverflow
+      root._commentOutput = ""
+      root._commentError = ""
+      root._commentOverflow = false
+      root.notePeekExit()
+      if (!root.peekCurrent(root._commentGen)) {
+        root.tryStartPendingPeek()
+        return
+      }
+      if (!root.panelOpen) {
+        root._pendingPeekItem = null
+        return
+      }
+      if (root.tryStartPendingPeek()) return
+      if (root._peekCardNumber === 0) return
       var card = root.peek && root.peek.card ? root.peek.card : null
       var comments = []
       var error = ""
-      if (root._commentOverflow) error = "Fizzy CLI output was too large"
-      else if (exitCode !== 0) error = root.conciseError(Model.friendlyCliError(root._commentError || root._commentOutput, "Could not load comments"))
+      if (overflow) error = "Fizzy CLI output was too large"
+      else if (exitCode !== 0) error = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not load comments"))
       else {
-        var parsed = Model.parseComments(root._commentOutput, 8)
+        var parsed = Model.parseComments(stdout, Model.commentListLimit())
         if (!parsed.ok) error = parsed.error
         else comments = parsed.items
       }

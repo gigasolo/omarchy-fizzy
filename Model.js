@@ -335,7 +335,7 @@ function parseComments(raw, limit) {
     return String(a.id || "").localeCompare(String(b.id || ""))
   })
 
-  var count = positiveInteger(limit, 8)
+  var count = positiveInteger(limit, commentListLimit())
   if (items.length > count) items = items.slice(items.length - count)
   return { ok: true, error: "", items: items }
 }
@@ -493,6 +493,10 @@ function peekCacheLimit() {
   return 8
 }
 
+function commentListLimit() {
+  return 8
+}
+
 function emptyCache() {
   return { order: [], values: Object.create(null) }
 }
@@ -575,6 +579,7 @@ if (typeof module !== "undefined") {
     unreadCount: unreadCount,
     withItemRead: withItemRead,
     withAllRead: withAllRead,
+    copyWith: copyWith,
     openUrl: openUrl,
     cardLink: cardLink,
     parseCard: parseCard,
@@ -590,6 +595,7 @@ if (typeof module !== "undefined") {
     safeCliToken: safeCliToken,
     cliOutputLimit: cliOutputLimit,
     peekCacheLimit: peekCacheLimit,
+    commentListLimit: commentListLimit,
     emptyCache: emptyCache,
     emptyList: emptyList,
     peekCacheGet: peekCacheGet,
