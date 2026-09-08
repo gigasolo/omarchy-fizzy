@@ -30,19 +30,27 @@ Panel {
   readonly property bool needsSetup: service.setupKind !== ""
   readonly property var setupGuide: Model.setupGuide(service.setupKind)
   readonly property color barIconColor: service.unreadCount > 0 ? urgent : (service.authenticated ? barForeground : Qt.darker(barForeground, 1.55))
-  readonly property var shortcutHelp: [
-    { keys: "j k", action: "Move" },
-    { keys: "Enter", action: "Open in browser" },
-    { keys: "Space", action: "Peek at the card" },
-    { keys: "c", action: "Copy card link" },
-    { keys: "a", action: "Send to agent" },
-    { keys: "m", action: "Mark this as read" },
-    { keys: "M", action: "Mark all notifications read" },
-    { keys: "u p", action: "Unread / previous" },
-    { keys: "r", action: "Refresh" },
-    { keys: "?", action: "Show or hide shortcuts" },
-    { keys: "Esc", action: "Back / close" }
-  ]
+  readonly property bool canMarkSelected: {
+    var item = peekTarget()
+    return !!(item && item.unread)
+  }
+  readonly property var shortcutHelp: {
+    var rows = [
+      { keys: "j k", action: "Move" },
+      { keys: "Enter", action: "Open in browser" },
+      { keys: "Space", action: "Peek at the card" },
+      { keys: "c", action: "Copy card link" },
+      { keys: "a", action: "Send to agent" }
+    ]
+    if (canMarkSelected) rows = rows.concat([{ keys: "m", action: "Mark this as read" }])
+    if (service.unreadCount > 0) rows = rows.concat([{ keys: "M", action: "Mark all as read" }])
+    return rows.concat([
+      { keys: "h l", action: "New / older" },
+      { keys: "r", action: "Refresh" },
+      { keys: "?", action: "Show or hide shortcuts" },
+      { keys: "Esc", action: "Back / close" }
+    ])
+  }
 
   property int phraseIndex: 0
   readonly property var loadingPhrases: [
@@ -68,7 +76,7 @@ Panel {
     if (!service.installed) return "Install fizzy-cli, then run fizzy setup."
     if (!service.authenticated) return "Run fizzy setup to sign in."
     if (stateFilter === "unread") return "You're all caught up."
-    return "No previous notifications."
+    return "No older notifications."
   }
 
   property var themeColors: ({})
@@ -99,6 +107,13 @@ Panel {
     if (panelFlick) panelFlick.contentY = 0
   }
 
+  function cycleStateFilter(delta) {
+    if (root.needsSetup) return
+    var next = Number(delta) > 0 ? "previous" : "unread"
+    if (stateFilter === next) return
+    setStateFilter(next)
+  }
+
   function ensureSelection() {
     if (filteredNotifications.length === 0) {
       selectedIndex = 0
@@ -123,6 +138,11 @@ Panel {
     select(selectedIndex + delta)
   }
 
+  function peekTarget() {
+    if (peeking && service.peekItem) return service.peekItem
+    return selectedItem
+  }
+
   function activateSelection() {
     if (showingHelp) return
     if (root.needsSetup) {
@@ -130,17 +150,20 @@ Panel {
       service.beginSetup()
       return
     }
-    if (!cursorActive || !selectedItem) return
-    service.openNotification(selectedItem)
+    var item = peekTarget()
+    if (!item) return
+    if (!peeking && !cursorActive) return
+    service.openNotification(item)
   }
 
   function togglePeek() {
-    if (showingHelp || root.needsSetup || !selectedItem) return
+    if (showingHelp || root.needsSetup) return
     if (peeking) {
       peeking = false
       service.closePeek()
       return
     }
+    if (!selectedItem) return
     if (!cursorActive) select(selectedIndex)
     peeking = true
     service.loadPeek(selectedItem)
@@ -160,20 +183,29 @@ Panel {
   }
 
   function copySelected() {
-    if (showingHelp || !selectedItem) return
-    service.copyCardLink(selectedItem)
+    if (showingHelp) return
+    var item = peekTarget()
+    if (!item) return
+    service.copyCardLink(item)
   }
 
   function sendSelectedToAgent() {
-    if (showingHelp || !selectedItem) return
-    service.sendToAgent(selectedItem)
-    root.close()
+    if (showingHelp) return
+    var item = peekTarget()
+    if (!item) return
+    if (service.sendToAgent(item)) root.close()
   }
 
   function markSelectedRead() {
-    if (showingHelp || !selectedItem) return
-    if (selectedItem.unread) service.markRead(selectedItem)
-    if (selectedItem.cardNumber) service.markCardRead(selectedItem)
+    if (showingHelp) return
+    var item = peekTarget()
+    if (!item) return
+    if (item.unread) service.markRead(item)
+  }
+
+  function markAllRead() {
+    if (showingHelp || root.needsSetup) return
+    service.markAllRead()
   }
 
   function toggleHelp() {
@@ -200,18 +232,22 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) {
-    cursorActive = false
-    peeking = false
-    showingHelp = false
-    enterHandled = false
-    nowMs = Date.now()
-    if (panelFlick) panelFlick.contentY = 0
-    service.refreshIfStale()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
-  } else {
-    peeking = false
-    service.closePeek()
+  onOpenedChanged: {
+    service.panelOpen = opened
+    if (opened) {
+      cursorActive = false
+      peeking = false
+      showingHelp = false
+      enterHandled = false
+      nowMs = Date.now()
+      if (panelFlick) panelFlick.contentY = 0
+      service.refreshIfStale()
+      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    } else {
+      peeking = false
+      showingHelp = false
+      service.closePeek()
+    }
   }
 
   onFilteredNotificationsChanged: ensureSelection()
@@ -227,7 +263,7 @@ Panel {
   }
 
   Timer {
-    interval: 30000
+    interval: 60000
     repeat: true
     running: root.opened
     onTriggered: root.nowMs = Date.now()
@@ -350,6 +386,7 @@ Panel {
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) root.moveSelection(dy)
+        else if (dx !== 0) root.cycleStateFilter(dx)
       }
       onReturnRequested: {
         root.enterHandled = true
@@ -370,7 +407,7 @@ Panel {
         else if (text === "u" || text === "U") root.setStateFilter("unread")
         else if (text === "p" || text === "P") root.setStateFilter("previous")
         else if (text === "m") root.markSelectedRead()
-        else if (text === "M") service.markAllRead()
+        else if (text === "M") root.markAllRead()
         else if (text === "c" || text === "C") root.copySelected()
         else if (text === "a" || text === "A") root.sendSelectedToAgent()
         else if (text === "?") root.toggleHelp()
@@ -413,6 +450,7 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
                 font.bold: true
+                textFormat: Text.PlainText
               }
 
               Text {
@@ -424,6 +462,7 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
+                textFormat: Text.PlainText
               }
             }
 
@@ -473,7 +512,7 @@ Panel {
             }
 
             Button {
-              text: "PREVIOUS"
+              text: "OLDER"
               selected: root.stateFilter === "previous"
               foreground: root.foreground
               background: "transparent"
@@ -507,6 +546,8 @@ Panel {
             SetupCard {
               visible: !root.showingHelp && root.needsSetup
               width: parent.width
+              panel: root
+              service: service
             }
 
             Text {
@@ -519,6 +560,7 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               topPadding: Style.space(16)
               bottomPadding: Style.space(18)
+              textFormat: Text.PlainText
             }
 
             Text {
@@ -532,16 +574,20 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               topPadding: Style.space(16)
               bottomPadding: Style.space(18)
+              textFormat: Text.PlainText
             }
 
             HelpView {
               visible: root.showingHelp
               width: parent.width
+              panel: root
             }
 
             PeekView {
               visible: !root.showingHelp && root.peeking && !root.needsSetup
               width: parent.width
+              panel: root
+              service: service
             }
 
             Column {
@@ -553,401 +599,16 @@ Panel {
               Repeater {
                 model: root.filteredNotifications
 
-                CursorSurface {
-                  id: notificationRow
-                  required property var modelData
-                  required property int index
+                NotificationRow {
                   width: notificationColumn.width
-                  foreground: root.foreground
-                  hasCursor: root.cursorActive && root.selectedIndex === index
-                  implicitHeight: rowContent.implicitHeight + Style.space(16)
-
-                  MouseArea {
-                    id: rowMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onPositionChanged: function(mouse) {
-                      if (pointerGate.moved(notificationRow, mouse)) root.select(notificationRow.index)
-                    }
-                    onClicked: service.openNotification(notificationRow.modelData)
-                  }
-
-                  PanelToolTip {
-                    visible: rowMouse.containsMouse
-                    text: (notificationRow.modelData.sourceType || "Notification") + (notificationRow.modelData.unread ? " · Unread" : " · Read")
-                    fontFamily: root.fontFamily
-                  }
-
-                  RowLayout {
-                    id: rowContent
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: Style.space(10)
-                    anchors.rightMargin: Style.space(10)
-                    spacing: Style.space(9)
-
-                    Rectangle {
-                      Layout.preferredWidth: Style.space(24)
-                      Layout.preferredHeight: Style.space(24)
-                      Layout.alignment: Qt.AlignTop
-                      radius: width / 2
-                      color: root.typeColor(notificationRow.modelData.sourceType)
-
-                      TextMetrics {
-                        id: glyphMetrics
-                        font.family: root.fontFamily
-                        font.pixelSize: Math.round(Style.font.icon)
-                        text: Model.notificationTypeIcon(notificationRow.modelData.sourceType)
-                      }
-
-                      Text {
-                        id: glyphText
-                        anchors.centerIn: parent
-                        anchors.horizontalCenterOffset: glyphText.implicitWidth / 2 - (glyphMetrics.tightBoundingRect.x + glyphMetrics.tightBoundingRect.width / 2)
-                        anchors.verticalCenterOffset: glyphText.implicitHeight / 2 - (glyphText.baselineOffset + glyphMetrics.tightBoundingRect.y + glyphMetrics.tightBoundingRect.height / 2)
-                        text: glyphMetrics.text
-                        color: Color.popups.background
-                        font.family: root.fontFamily
-                        font.pixelSize: glyphMetrics.font.pixelSize
-                        renderType: Text.NativeRendering
-                      }
-                    }
-
-                    ColumnLayout {
-                      Layout.fillWidth: true
-                      spacing: Style.space(2)
-
-                      Text {
-                        Layout.fillWidth: true
-                        text: notificationRow.modelData.title
-                        color: root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.body
-                        font.weight: notificationRow.modelData.unread ? Font.DemiBold : Font.Normal
-                        elide: Text.ElideRight
-                      }
-
-                      Text {
-                        visible: notificationRow.modelData.excerpt !== ""
-                        Layout.fillWidth: true
-                        text: notificationRow.modelData.excerpt
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        maximumLineCount: 2
-                        wrapMode: Text.Wrap
-                        elide: Text.ElideRight
-                      }
-
-                      Text {
-                        Layout.fillWidth: true
-                        text: Model.notificationMeta(notificationRow.modelData, root.nowMs)
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                      }
-                    }
-
-                    Rectangle {
-                      visible: notificationRow.modelData.unread
-                      Layout.alignment: Qt.AlignTop
-                      Layout.topMargin: Style.space(2)
-                      Layout.preferredHeight: Style.space(16)
-                      Layout.preferredWidth: Math.max(Style.space(16), rowBadgeText.implicitWidth + Style.space(8))
-                      radius: Style.space(8)
-                      color: root.urgent
-
-                      Text {
-                        id: rowBadgeText
-                        anchors.centerIn: parent
-                        text: String(Math.max(1, notificationRow.modelData.unreadCount || 0))
-                        color: Color.background
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                      }
-                    }
-
-                    PanelActionButton {
-                      iconText: "󰆏"
-                      tooltipText: "Copy card link"
-                      foreground: root.foreground
-                      fontFamily: root.fontFamily
-                      Layout.alignment: Qt.AlignVCenter
-                      onClicked: service.copyCardLink(notificationRow.modelData)
-                    }
-                  }
+                  panel: root
+                  service: service
+                  pointerGate: pointerGate
                 }
               }
             }
           }
         }
-      }
-    }
-  }
-
-  component HelpView: Column {
-    width: parent ? parent.width : implicitWidth
-    spacing: Style.space(8)
-
-    Text {
-      width: parent.width
-      text: "SHORTCUTS"
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      font.bold: true
-    }
-
-    Repeater {
-      model: root.shortcutHelp
-
-      Row {
-        required property var modelData
-        width: parent.width
-        spacing: Style.space(12)
-
-        Text {
-          width: Style.space(90)
-          text: modelData.keys
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-        }
-
-        Text {
-          text: modelData.action
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-        }
-      }
-    }
-  }
-
-  component PeekView: Column {
-    width: parent ? parent.width : implicitWidth
-    spacing: Style.space(10)
-
-    readonly property var peek: service.peek
-    readonly property var card: peek && peek.card ? peek.card : null
-
-    RowLayout {
-      width: parent.width
-      spacing: Style.space(8)
-
-      Button {
-        text: "BACK"
-        foreground: root.foreground
-        background: "transparent"
-        accent: Color.accent
-        fontFamily: root.fontFamily
-        fontSize: Style.font.caption
-        horizontalPadding: Style.space(7)
-        verticalPadding: Style.space(1)
-        onClicked: root.togglePeek()
-      }
-
-      Item { Layout.fillWidth: true }
-
-      PanelActionButton {
-        iconText: "󰆏"
-        tooltipText: "Copy card link"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onClicked: root.copySelected()
-      }
-
-      PanelActionButton {
-        iconText: "󰚩"
-        tooltipText: "Send to agent"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onClicked: root.sendSelectedToAgent()
-      }
-
-      PanelActionButton {
-        iconText: "󰡕"
-        tooltipText: "Mark as read"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onClicked: root.markSelectedRead()
-      }
-    }
-
-    Text {
-      width: parent.width
-      text: card ? card.title : (peek && peek.title ? peek.title : "Card")
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-      font.weight: Font.DemiBold
-      wrapMode: Text.WordWrap
-    }
-
-    Text {
-      visible: card && card.boardName !== ""
-      width: parent.width
-      text: card ? card.boardName : ""
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
-    Text {
-      visible: peek && peek.loading
-      width: parent.width
-      text: "Loading card…"
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-    }
-
-    Text {
-      visible: peek && peek.error !== ""
-      width: parent.width
-      text: peek ? peek.error : ""
-      color: root.urgent
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      wrapMode: Text.WordWrap
-    }
-
-    Text {
-      visible: card && card.description !== ""
-      width: parent.width
-      text: card ? card.description : ""
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      wrapMode: Text.Wrap
-      maximumLineCount: 12
-      elide: Text.ElideRight
-    }
-
-    PanelSeparator {
-      visible: peek && peek.comments && peek.comments.length > 0
-      foreground: root.foreground
-    }
-
-    Text {
-      visible: peek && !peek.loading && peek.comments && peek.comments.length === 0 && peek.error === ""
-      width: parent.width
-      text: "No comments yet."
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
-    Repeater {
-      model: peek && peek.comments ? peek.comments : []
-
-      Column {
-        required property var modelData
-        width: parent.width
-        spacing: Style.space(2)
-
-        Text {
-          width: parent.width
-          text: Model.notificationMeta({ timestampMs: modelData.timestampMs, creator: modelData.creator }, root.nowMs)
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-
-        Text {
-          width: parent.width
-          text: modelData.text
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.Wrap
-          maximumLineCount: 6
-          elide: Text.ElideRight
-        }
-      }
-    }
-  }
-
-  component SetupCard: CursorSurface {
-    id: setupCard
-
-    hasCursor: root.cursorActive && root.needsSetup
-    foreground: root.foreground
-
-    implicitHeight: setupRow.implicitHeight + Style.spacing.rowPaddingX
-
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onEntered: root.cursorActive = true
-      onClicked: service.beginSetup()
-    }
-
-    RowLayout {
-      id: setupRow
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
-      anchors.rightMargin: Style.space(10)
-      spacing: Style.space(8)
-
-      Text {
-        text: root.setupGuide.kind === "missing_cli" ? "󰏖" : "󰌆"
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.heading
-        Layout.alignment: Qt.AlignTop
-        Layout.topMargin: Style.space(2)
-      }
-
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: Style.space(4)
-
-        Text {
-          Layout.fillWidth: true
-          text: root.setupGuide.title
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          font.weight: Font.DemiBold
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          Layout.fillWidth: true
-          text: root.setupGuide.detail
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          Layout.fillWidth: true
-          text: root.setupGuide.commands.map(function(command) { return "$ " + command }).join("\n")
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-          topPadding: Style.space(2)
-        }
-      }
-
-      PanelActionButton {
-        iconText: "󰌋"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        tooltipText: root.setupGuide.action
-        Layout.alignment: Qt.AlignVCenter
-        onClicked: service.beginSetup()
       }
     }
   }

@@ -4,7 +4,7 @@ This plugin runs as unsandboxed code inside `omarchy-shell`. Treat it like anyth
 
 ## What it can access
 
-The plugin only shells out to the local [Fizzy CLI](https://github.com/basecamp/fizzy-cli). It does not read `FIZZY_TOKEN`, `~/.config/fizzy/`, or `~/.fizzy.yaml`.
+The plugin only shells out to the local [Fizzy CLI](https://github.com/basecamp/fizzy-cli). It does not read `FIZZY_TOKEN`, `~/.config/fizzy/`, or `~/.fizzy.yaml`. Card links are copied with `wl-copy` as an argv vector (no shell). Send-to-agent launches `omarchy-agent-prompt` with a length-capped prompt that labels Fizzy fields as untrusted data.
 
 It runs:
 
@@ -13,9 +13,20 @@ fizzy identity show --json
 fizzy notification list --json
 fizzy notification read <id> --json
 fizzy notification read-all --json
+fizzy card show <number> --json
+fizzy comment list --card <number> --json
+```
+
+Copy and agent handoff, on an explicit keypress or button:
+
+```
+wl-copy -- <https-url>
+omarchy-agent-prompt <prompt>
 ```
 
 Install and sign-in actions launch Omarchy terminals (`omarchy pkg aur add fizzy-cli` and `fizzy setup`). Those run in a terminal you can see, not hidden in the shell process.
+
+CLI ids, card numbers, and URLs are validated before they become process arguments or `Qt.openUrlExternally` targets. Notification HTML is shown as plain text.
 
 ## Reporting a vulnerability
 

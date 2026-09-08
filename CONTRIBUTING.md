@@ -18,15 +18,15 @@ You need [Omarchy](https://omarchy.org/) 4 (Quattro), the Fizzy CLI, and a signe
 ./tests/run
 ```
 
-That runs the Model tests and `omarchy plugin validate`. Omarchy will not install a plugin that fails validation.
+That runs the Model tests, `tests/qml.test.sh`, and `omarchy plugin validate`. Omarchy will not install a plugin that fails validation.
 
-6. Load your checkout and click through the panel: open, refresh, unread/previous, open a card, mark read, disable, re-enable.
+6. Load your checkout and click through the panel: open, refresh, new/older, peek (does not mark read), copy, send to agent, mark read on New for you only, shortcuts overlay, disable, re-enable.
 
 ## Pull requests
 
 - Describe what you changed and how you tried it.
 - Keep the MIT license.
-- Do not commit tokens, Fizzy config, screenshots of tokens, or personal account names.
+- Do not commit tokens, Fizzy config, screenshots of tokens, or personal account names. Marketplace shots belong in `preview.png` and `docs/`; crop the panel only.
 
 ## License
 

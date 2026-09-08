@@ -7,12 +7,15 @@ Unread [Fizzy](https://fizzy.do) notifications in your [Omarchy](https://omarchy
 [![Omarchy 4](https://img.shields.io/badge/omarchy-4%20Quattro-informational)](https://omarchy.org/)
 
 <p align="center">
-  <img src="docs/panel.png" alt="Fizzy panel showing an empty New for you list" width="560">
+  <img src="preview.png" alt="Fizzy shortcuts overlay: peek, copy, send to agent, mark read" width="380">
+  <img src="docs/panel.png" alt="Fizzy panel showing an empty New for you list" width="380">
 </p>
 
-Click the mark to open a keyboard-friendly tray, open a card in the browser, and mark it read. If the Fizzy CLI is not installed or you have not signed in yet, the panel shows how to finish setup.
+Click the mark to open a keyboard-friendly tray. **New for you** is your Fizzy inbox (assigned, mentioned, or activity you watch) — not every new card on the board. **Older** is pings you have already seen. Peek at a card, copy the link, send it to your Omarchy agent, or mark a new ping read. Press `?` for shortcuts. If the Fizzy CLI is not installed or you have not signed in yet, the panel shows how to finish setup.
 
 This is an independent MIT-licensed plugin for Omarchy 4 (Quattro). It is not affiliated with or endorsed by 37signals.
+
+See [CHANGELOG.md](CHANGELOG.md) for 1.1.0.
 
 ## Install
 
@@ -64,20 +67,24 @@ The plugin uses the CLI's current login only. Multiple Fizzy accounts are not su
 
 ## Use
 
+Click **New for you** / **Older**, or use `h` / `l` and the left / right arrows. `u` / `p` jump the same way.
+
+Space peeks without marking the ping read. Enter opens the card in Fizzy and marks it read. `m` clears the ping without opening it, on New for you only.
+
 | Action | How |
 | --- | --- |
 | Open or close the panel | Left-click the mark |
 | Refresh now | Right-click or middle-click, or press `r` |
-| Move | `j` / `k` or the arrow keys |
+| Move | `j` / `k` or the up / down arrows |
+| New / older | Click the tabs, `h` / `l`, the left / right arrows, or `u` / `p` |
 | Open the selected card in the browser | Enter |
 | Peek at the card and comments | Space |
 | Copy card link | `c` |
 | Send the card to your Omarchy agent | `a` |
-| Mark this as read | `m` |
-| Mark all notifications read | `M` |
+| Mark this as read | `m` (New for you) |
+| Mark all as read | `M` |
 | Shortcuts | `?` or the help button |
 | Install or sign in | Click the setup card, or press `s` |
-| Unread / previous | `u` / `p` |
 | Close | Escape |
 | Next bar panel | Tab |
 
@@ -90,6 +97,8 @@ omarchy plugin remove gigasolo.fizzy
 
 `omarchy plugin update` shows the diff and fast-forwards the git checkout. Removing the plugin does not log you out of Fizzy.
 
+If you installed an early 1.0 copy as `lonbaker.fizzy`, `omarchy plugin update` cannot rename it. Remove that checkout, then add this repo again.
+
 ## Settings
 
 Change these on the widget entry in `~/.config/omarchy/shell.json`, or with `omarchy bar`:
@@ -101,7 +110,7 @@ Change these on the widget entry in `~/.config/omarchy/shell.json`, or with `oma
 
 ## Privacy
 
-The plugin only runs these local commands. It never sends a token on the command line, and it never writes notification content to disk.
+The plugin only runs these local commands. It never sends a token on the command line, and it never writes notification content to disk. Copy uses `wl-copy -- <url>` (no shell). Send-to-agent passes a capped prompt to `omarchy-agent-prompt`. Card links must be `https` on `*.fizzy.do`.
 
 ```
 fizzy identity show --json
@@ -109,8 +118,7 @@ fizzy notification list --json
 fizzy notification read <id> --json
 fizzy notification read-all --json
 fizzy card show <number> --json
-fizzy card mark-read <number> --json
-fizzy comment list --card <number> --json
+fizzy comment list --card <number> --limit 8 --json
 ```
 
 ## If something is wrong
@@ -136,7 +144,7 @@ cd omarchy-fizzy
 ./tests/run
 ```
 
-That runs the Model tests and `omarchy plugin validate .`, the same checks Omarchy uses before it will install a plugin.
+That runs the Model tests, `tests/qml.test.sh` (QML grep invariants), and `omarchy plugin validate .`, the same checks Omarchy uses before it will install a plugin.
 
 To load a local checkout:
 
@@ -150,7 +158,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Omarchy distributes third-party plugins as public git repos. Anyone can run `omarchy plugin add` against this URL.
 
-To help people find it, list it at [omarchyplugins.com](https://omarchyplugins.com).
+To help people find it, list it at [plugins.omarchy.org](https://plugins.omarchy.org/) (`omarchyplugins.com` redirects there). The marketplace preview is `preview.png`. Paste-ready listing copy lives in [docs/marketplace.md](docs/marketplace.md).
 
 ## License
 
