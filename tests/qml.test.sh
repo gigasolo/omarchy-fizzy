@@ -26,7 +26,7 @@ must_not 'StdioCollector' "$root/Service.qml" "StdioCollector retains unbounded 
 must 'property bool panelOpen' "$root/Service.qml" "Service must expose panelOpen"
 must 'service.panelOpen = opened' "$root/Panel.qml" "Panel must tell Service when it is open"
 must 'running: root.opened' "$root/Panel.qml" "UI timers must not run while the panel is closed"
-must 'running: root.opened && root.needsSetup' "$root/Panel.qml" "setup poll must not run while the panel is closed"
+must 'running: root.opened && (root.needsSetup || service.awaitingProfile !== "")' "$root/Panel.qml" "setup poll must not run while the panel is closed"
 must 'running: root.opened && root.rotatingPhrases' "$root/Panel.qml" "phrase timer must not run while the panel is closed"
 must 'text === "m") root.markSelectedRead' "$root/Panel.qml" "m marks the peeked or selected item"
 must 'text === "M") root.markAllRead' "$root/Panel.qml" "M is gated by the panel helper"
@@ -41,6 +41,19 @@ must 'function togglePeek' "$root/Panel.qml" "Space peeks the selected card"
 must 'function peekTarget' "$root/Panel.qml" "peek actions follow the peeked notification"
 must '"--limit", String(root.maxItems)' "$root/Service.qml" "notification list must pass --limit matching maxItems"
 must_not 'notification", "list", "--json"]' "$root/Service.qml" "notification list must not fetch unbounded JSON"
+must 'fizzyArgs' "$root/Service.qml" "every Fizzy command must go through fizzyArgs"
+must '"auth", "list"' "$root/Service.qml" "refresh must discover CLI profiles"
+must_not '"auth", "switch"' "$root/Service.qml" "Service must not call fizzy auth switch"
+must 'profileFilter' "$root/Panel.qml" "the tray can filter to one profile"
+must 'function cycleProfileFilter' "$root/Panel.qml" "[ ] must cycle All / account"
+must 'text === "\["' "$root/Panel.qml" "[ cycles profiles"
+must 'text === "\]"' "$root/Panel.qml" "] cycles profiles"
+must 'function jumpAccountDigit' "$root/Panel.qml" "1-9 jump accounts like workspaces"
+must 'AccountsView' "$root/Panel.qml" "accounts overlay should live in AccountsView.qml"
+must 'accountNameForProfile' "$root/Service.qml" "refresh must skip identity show when the account name is already known"
+must_not 'parseIdentity' "$root/Service.qml" "identity JSON must be parsed once via interpretIdentity"
+must 'beginAddProfile' "$root/Service.qml" "add account must launch fizzy setup --profile"
+must '"auth", "logout"' "$root/Service.qml" "remove account must call fizzy auth logout"
 must 'commentListLimit' "$root/Service.qml" "comment list limit must live in Model.js"
 must '"--limit", String(Model.commentListLimit())' "$root/Service.qml" "comment list must pass --limit from Model"
 must 'function markPeekItemRead' "$root/Service.qml" "peekItem must follow mark-read so the check hides"
@@ -49,6 +62,7 @@ must 'PeekView' "$root/Panel.qml" "card peek should live in PeekView.qml"
 must 'NotificationRow' "$root/Panel.qml" "notification rows should live in NotificationRow.qml"
 must_not 'FIZZY_TOKEN' "$root/Service.qml" "Service must not mention tokens"
 must_not 'FIZZY_TOKEN' "$root/Panel.qml" "Panel must not mention tokens"
+must_not 'FIZZY_TOKEN' "$root/AccountsView.qml" "Accounts overlay must not mention tokens"
 must_not 'comment create' "$root/Service.qml" "do not add a comment composer"
 must_not 'boards search' "$root/Service.qml" "do not add boards search"
 
@@ -106,15 +120,30 @@ def on_exited_bodies(src):
 
 panel = (root / "Panel.qml").read_text()
 service = (root / "Service.qml").read_text()
+row = re.search(r"NotificationRow\s*\{", panel)
+if not row:
+    raise SystemExit("missing NotificationRow instantiation")
+row_body = brace_body(panel, panel.find("{", row.end() - 1))
+if re.search(r"\bservice\s*:\s*service\b", row_body):
+    raise SystemExit("NotificationRow is a Repeater delegate; service: service self-binds to undefined")
+if re.search(r"\bpointerGate\s*:\s*pointerGate\b", row_body):
+    raise SystemExit("NotificationRow is a Repeater delegate; pointerGate: pointerGate self-binds to undefined")
+if "root.service" not in row_body and "fizzyService" not in row_body:
+    raise SystemExit("NotificationRow must bind service from the panel scope, not its own property")
 for name in ("togglePeek", "loadPeek", "beginPeek", "closePeek"):
     src = panel if name == "togglePeek" else service
     body = function_body(src, name)
     if re.search(r"\bmarkRead\b", body) or re.search(r"\bopenNotification\b", body):
         raise SystemExit(name + " must not mark a notification read")
-for name in ("markSelectedRead", "markAllRead", "activateSelection", "togglePeek", "copySelected", "sendSelectedToAgent"):
+for name in ("markSelectedRead", "markAllRead", "activateSelection", "togglePeek", "copySelected", "sendSelectedToAgent", "cycleProfileFilter"):
     body = function_body(panel, name)
-    if "showingHelp" not in body:
-        raise SystemExit(name + " must ignore keys while the help overlay is open")
+    if "overlayOpen" not in body and not ("showingHelp" in body and "showingAccounts" in body):
+        raise SystemExit(name + " must ignore keys while an overlay is open")
+jump = function_body(panel, "jumpAccountDigit")
+if "showingHelp" not in jump:
+    raise SystemExit("jumpAccountDigit must ignore keys while help is open")
+if "overlayOpen" in jump:
+    raise SystemExit("jumpAccountDigit must still work in the accounts overlay")
 
 watchdog = on_triggered(service, "peekWatchdog")
 stopped = watchdog.find("stopProcess")
@@ -167,7 +196,68 @@ if "markPeekItemRead" not in finish:
 if "_peekUnreadBeforeAll" not in finish:
     raise SystemExit("failed read-all must restore the peeked row's prior unread state")
 
+start_next = function_body(service, "startNextProfile")
+known = re.search(r"accountNameForProfile\(\s*profiles\b", start_next)
+if not known:
+    raise SystemExit("startNextProfile must skip identity show using committed profiles")
+list_at = start_next.find("startNotificationList")
+ident_at = start_next.find("startIdentity")
+if list_at < 0 or list_at < known.start():
+    raise SystemExit("startNextProfile must list notifications after a known account name")
+if ident_at < 0 or ident_at < known.start():
+    raise SystemExit("startNextProfile must consult known account names before identity show")
+if "return" not in start_next[known.start():ident_at]:
+    raise SystemExit("startNextProfile must return before identity show on the known-name path")
+if list_at > ident_at:
+    raise SystemExit("startNextProfile must list notifications on the known-name path before identity show")
+
+apply_ident = function_body(service, "applyProfileIdentity")
+if "parseIdentity" in apply_ident:
+    raise SystemExit("applyProfileIdentity must not parse identity JSON a second time")
+if not re.search(r"interpretIdentity\([^)]*accountId", apply_ident):
+    raise SystemExit("applyProfileIdentity must pass the profile account id into interpretIdentity")
+
+if not re.search(
+    r"property var accountRows:\s*showingAccounts\s*\?\s*Model\.accountSwitcherRows\s*\([^)]*\)\s*:\s*Model\.emptyList\s*\(\s*\)",
+    panel,
+    re.S,
+):
+    raise SystemExit("accountRows must build switcher rows only while the overlay is open")
+
+help_bind = re.search(r"property var shortcutHelp:\s*\{", panel)
+if not help_bind:
+    raise SystemExit("missing shortcutHelp")
+help_body = brace_body(panel, help_bind.end() - 1)
+if help_body.find("emptyList") < 0 or help_body.find("showingHelp") < 0:
+    raise SystemExit("shortcutHelp must use a stable empty model while help is closed")
+if "Move" in help_body and help_body.find("emptyList") > help_body.find("Move"):
+    raise SystemExit("shortcutHelp must return a stable empty model before building rows")
+if "filterNotifications" in help_body:
+    raise SystemExit("shortcutHelp must not re-filter notifications to count unread")
+empty_at = help_body.find("emptyList")
+after_empty = help_body[empty_at:]
+if not re.search(r"unreadCount\([^)]*profileFilter", after_empty):
+    raise SystemExit("shortcutHelp must count unread for the selected profile")
+
+accounts = (root / "AccountsView.qml").read_text()
+rep = re.search(r"Repeater\s*\{", accounts)
+if not rep:
+    raise SystemExit("missing AccountsView Repeater")
+rep_body = brace_body(accounts, accounts.find("{", rep.end() - 1))
+model = re.search(r"\bmodel:\s*(.+)", rep_body)
+if not model:
+    raise SystemExit("AccountsView Repeater missing model")
+expr = model.group(1)
+if "[]" in expr:
+    raise SystemExit("AccountsView Repeater must not use [] as a model")
+if not re.search(r"(?:addingAccount|confirmingRemove)[^:\n]*\?[^:\n]*emptyList", expr):
+    raise SystemExit("AccountsView Repeater add/remove path must use Model.emptyList()")
+
 props = [
+    ("_authOutput", "stdout"),
+    ("_authError", "stderr"),
+    ("_logoutOutput", "stdout"),
+    ("_logoutError", "stderr"),
     ("_identityOutput", "stdout"),
     ("_identityError", "stderr"),
     ("_listOutput", "stdout"),

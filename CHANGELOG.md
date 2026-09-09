@@ -7,10 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-## [1.1.0] — 2026-09-07
+## [1.1.0] — 2026-09-09
 
-Peek, copy, and send-to-agent from a notification tray. New for you is your
-inbox, not every new card on the board. Older is pings you have already seen.
+Peek, copy, and send-to-agent from a notification tray. Combined inbox
+across every signed-in CLI profile. New for you is your inbox, not every
+new card on the board. Older is pings you have already seen.
 
 ### Added
 
@@ -23,9 +24,14 @@ inbox, not every new card on the board. Older is pings you have already seen.
 - `h` / `l` and the left / right arrows switch New for you and Older.
   `u` / `p` still jump. The tabs are clickable.
 - `tests/qml.test.sh` greps QML invariants during `./tests/run`.
-- Marketplace `preview.png` is the shortcuts overlay. `docs/help.png` is the
-  same crop. Live list and peek shots are not published (they showed a real
-  board).
+- Combined inbox across every signed-in Fizzy CLI profile. Accounts overlay
+  (`s`) matches workspace switching: `1` is All, `2`–`9` jump to an account,
+  `[` / `]` cycle. Add runs `fizzy setup --profile` in a visible terminal.
+  Remove confirms, then `fizzy auth logout --profile`. The plugin never runs
+  `fizzy auth switch`.
+- [docs/screenshots.md](docs/screenshots.md) is the recipe for marketplace
+  and README crops: GigaBoard Example board on the `gigasolo` CLI profile,
+  pinged by a second user (Fizzy never notifies you of your own work).
 
 ### Changed
 
@@ -36,12 +42,21 @@ inbox, not every new card on the board. Older is pings you have already seen.
 - `j` / `k` only move.
 - Plugin id is `gigasolo.fizzy`. Early 1.0 installs as `lonbaker.fizzy` cannot
   be renamed in place: remove, then add this repo again.
-- Panel UI is split into `HelpView`, `PeekView`, `SetupCard`, and
-  `NotificationRow`.
+- Panel UI is split into `HelpView`, `PeekView`, `SetupCard`,
+  `NotificationRow`, and `AccountsView`.
 - Peek results are cached for eight cards (LRU) for the rest of the session.
+- README documents the row buttons (copy, send to agent, mark read) and
+  points at the changelog plus the screenshot recipe.
+- Marketplace `preview.png` is the populated **New for you** list.
+  `docs/help.png` is the shortcuts overlay. `docs/peek.png` and
+  `docs/accounts.png` are GigaBoard Example crops (no live customer
+  profiles).
 
 ### Fixed
 
+- Clicking mark read, copy, or send-to-agent on a notification row does
+  nothing. The row is a Repeater delegate, so `service: service` bound the
+  row's own undefined `service` property instead of the Fizzy service.
 - A missing Fizzy CLI no longer leaves the panel on “Checking the board”.
   Quickshell never exits a `Process` whose command is not on `PATH`, so the
   plugin probes with `which fizzy` first.

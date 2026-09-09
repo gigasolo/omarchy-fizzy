@@ -9,13 +9,18 @@ The plugin only shells out to the local [Fizzy CLI](https://github.com/basecamp/
 It runs:
 
 ```
-fizzy identity show --json
-fizzy notification list --limit <maxItems> --json
-fizzy notification read <id> --json
-fizzy notification read-all --json
-fizzy card show <number> --json
-fizzy comment list --card <number> --limit 8 --json
+fizzy auth list --json
+fizzy --profile <name> identity show --json
+fizzy --profile <name> notification list --limit <maxItems> --json
+fizzy --profile <name> notification read <id> --json
+fizzy --profile <name> notification read-all --json
+fizzy --profile <name> card show <number> --json
+fizzy --profile <name> comment list --card <number> --limit 8 --json
+fizzy --profile <name> setup
+fizzy --profile <name> auth logout --json
 ```
+
+`--profile` is a per-command override. The plugin does not run `fizzy auth switch`. Add account launches `fizzy setup --profile` in a visible terminal. Remove runs `fizzy auth logout --profile`.
 
 Copy and agent handoff, on an explicit keypress or button:
 

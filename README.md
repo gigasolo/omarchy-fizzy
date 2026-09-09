@@ -7,15 +7,15 @@ Unread [Fizzy](https://fizzy.do) notifications in your [Omarchy](https://omarchy
 [![Omarchy 4](https://img.shields.io/badge/omarchy-4%20Quattro-informational)](https://omarchy.org/)
 
 <p align="center">
-  <img src="preview.png" alt="Fizzy shortcuts overlay: peek, copy, send to agent, mark read" width="380">
-  <img src="docs/panel.png" alt="Fizzy panel showing an empty New for you list" width="380">
+  <img src="preview.png" alt="Fizzy New for you list with copy, send-to-agent, and mark-read buttons" width="380">
+  <img src="docs/peek.png" alt="Peek of a card and its comments, without marking the ping read" width="380">
 </p>
 
-Click the mark to open a keyboard-friendly tray. **New for you** is your Fizzy inbox (assigned, mentioned, or activity you watch) — not every new card on the board. **Older** is pings you have already seen. Peek at a card, copy the link, send it to your Omarchy agent, or mark a new ping read. Press `?` for shortcuts. If the Fizzy CLI is not installed or you have not signed in yet, the panel shows how to finish setup.
+Click the mark to open a keyboard-friendly tray. **New for you** is your Fizzy inbox (assigned, mentioned, or activity you watch) — not every new card on the board. **Older** is pings you have already seen. Every signed-in CLI profile is combined. Press `s` (or the accounts button) for the workspace-style switcher: `1` is All, `2`–`9` jump to an account. Add and remove logins from that overlay. Peek at a card and its comments, copy or open the link, send it to your Omarchy agent (Send to Agent), or mark a new ping read. Press `?` for shortcuts. If the Fizzy CLI is not installed or you have not signed in yet, the panel shows how to finish setup.
 
 This is an independent MIT-licensed plugin for Omarchy 4 (Quattro). It is not affiliated with or endorsed by 37signals.
 
-See [CHANGELOG.md](CHANGELOG.md) for 1.1.0.
+See [CHANGELOG.md](CHANGELOG.md) for what shipped in 1.1.0 and what is still unreleased. Hero and marketplace shots are from the GigaBoard Example board — [docs/screenshots.md](docs/screenshots.md).
 
 ## Install
 
@@ -63,13 +63,13 @@ fizzy setup
 fizzy auth status
 ```
 
-The plugin uses the CLI's current login only. Multiple Fizzy accounts are not supported. The plugin never reads your token.
+The plugin discovers every signed-in Fizzy CLI profile (`fizzy auth list`) and shows a combined inbox. Press `s` for the accounts overlay (`1` All, `2`–`9` jump). Add opens `fizzy setup --profile` in a terminal. Remove signs that profile out. The plugin never reads your token and never runs `fizzy auth switch`.
 
 ## Use
 
 Click **New for you** / **Older**, or use `h` / `l` and the left / right arrows. `u` / `p` jump the same way.
 
-Space peeks without marking the ping read. Enter opens the card in Fizzy and marks it read. `m` clears the ping without opening it, on New for you only.
+Each unread row has copy, send-to-agent, and mark-read buttons. Clicking the row (or pressing Enter) opens the card in the browser and marks the ping read. Space peeks without marking it read. `m` marks this ping read on New for you only.
 
 | Action | How |
 | --- | --- |
@@ -77,16 +77,24 @@ Space peeks without marking the ping read. Enter opens the card in Fizzy and mar
 | Refresh now | Right-click or middle-click, or press `r` |
 | Move | `j` / `k` or the up / down arrows |
 | New / older | Click the tabs, `h` / `l`, the left / right arrows, or `u` / `p` |
-| Open the selected card in the browser | Enter |
+| Switch account | `1` All, `2`–`9` a signed-in account (workspace-style) |
+| Accounts overlay | `s`, or the accounts button. `n` add, `x` remove, `j` / `k` move |
+| Cycle account | `[` / `]` |
+| Open the selected card in the browser | Click the row, or press Enter |
 | Peek at the card and comments | Space |
-| Copy card link | `c` |
-| Send the card to your Omarchy agent | `a` |
-| Mark this as read | `m` (New for you) |
+| Copy card link | Row button, peek button, or `c` |
+| Send the card to your Omarchy agent | Row button, peek button, or `a` |
+| Mark this as read | Row or peek check, or `m` (New for you) |
 | Mark all as read | `M` |
 | Shortcuts | `?` or the help button |
 | Install or sign in | Click the setup card, or press `s` |
 | Close | Escape |
 | Next bar panel | Tab |
+
+<p align="center">
+  <img src="docs/help.png" alt="Keyboard shortcuts overlay for the Fizzy tray" width="380">
+  <img src="docs/accounts.png" alt="Accounts overlay: 1 All, 2 GigaBoard, add account" width="380">
+</p>
 
 ## Update and remove
 
@@ -113,12 +121,13 @@ Change these on the widget entry in `~/.config/omarchy/shell.json`, or with `oma
 The plugin only runs these local commands. It never sends a token on the command line, and it never writes notification content to disk. Copy uses `wl-copy -- <url>` (no shell). Send-to-agent passes a capped prompt to `omarchy-agent-prompt`. Card links must be `https` on `*.fizzy.do`.
 
 ```
-fizzy identity show --json
-fizzy notification list --limit <maxItems> --json
-fizzy notification read <id> --json
-fizzy notification read-all --json
-fizzy card show <number> --json
-fizzy comment list --card <number> --limit 8 --json
+fizzy auth list --json
+fizzy --profile <name> identity show --json
+fizzy --profile <name> notification list --limit <maxItems> --json
+fizzy --profile <name> notification read <id> --json
+fizzy --profile <name> notification read-all --json
+fizzy --profile <name> card show <number> --json
+fizzy --profile <name> comment list --card <number> --limit 8 --json
 ```
 
 ## If something is wrong
@@ -159,6 +168,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 Omarchy distributes third-party plugins as public git repos. Anyone can run `omarchy plugin add` against this URL.
 
 To help people find it, list it at [plugins.omarchy.org](https://plugins.omarchy.org/) (`omarchyplugins.com` redirects there). The marketplace preview is `preview.png`. Paste-ready listing copy lives in [docs/marketplace.md](docs/marketplace.md).
+
+Published images must come from fake data on the GigaBoard **Example** board (`fizzy` profile `gigasolo`), never from VirtualPBX or another live board. How to seed that board, ping it from a second user, and crop the shots: [docs/screenshots.md](docs/screenshots.md).
 
 ## License
 

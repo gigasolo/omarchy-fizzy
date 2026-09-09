@@ -16,6 +16,11 @@ Column {
   readonly property var peek: service.peek
   readonly property var card: peek && peek.card ? peek.card : null
   readonly property string boardName: (card && card.boardName) ? card.boardName : (peek && peek.boardName ? peek.boardName : "")
+  readonly property string accountName: service.peekItem && service.peekItem.accountName ? service.peekItem.accountName : ""
+  readonly property string locationText: {
+    if (accountName !== "" && boardName !== "") return accountName + " • " + boardName
+    return accountName || boardName
+  }
   readonly property var comments: peek && peek.comments ? peek.comments : Model.emptyList()
 
   RowLayout {
@@ -74,9 +79,9 @@ Column {
   }
 
   Text {
-    visible: boardName !== ""
+    visible: locationText !== ""
     width: parent.width
-    text: boardName
+    text: locationText
     color: root.panel.dim
     font.family: root.panel.fontFamily
     font.pixelSize: Style.font.caption

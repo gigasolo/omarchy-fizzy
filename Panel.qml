@@ -17,16 +17,27 @@ Panel {
   property bool cursorActive: false
   property bool peeking: false
   property bool showingHelp: false
+  property bool showingAccounts: false
+  property bool addingAccount: false
+  property bool confirmingRemove: false
+  property int accountIndex: 0
+  property string addName: ""
   property bool enterHandled: false
   property double nowMs: Date.now()
   property string stateFilter: "unread"
+  property string profileFilter: ""
   readonly property var selectedItem: filteredNotifications.length > 0 ? filteredNotifications[selectedIndex] : null
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, stateFilter)
+  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, stateFilter, profileFilter)
+  readonly property var accountRows: showingAccounts
+    ? Model.accountSwitcherRows(service.profiles, service.notifications, profileFilter)
+    : Model.emptyList()
+  readonly property bool overlayOpen: showingHelp || showingAccounts
+  readonly property bool showAccountMeta: service.profiles.length > 1 && profileFilter === ""
   readonly property bool needsSetup: service.setupKind !== ""
   readonly property var setupGuide: Model.setupGuide(service.setupKind)
   readonly property color barIconColor: service.unreadCount > 0 ? urgent : (service.authenticated ? barForeground : Qt.darker(barForeground, 1.55))
@@ -35,6 +46,7 @@ Panel {
     return !!(item && item.unread)
   }
   readonly property var shortcutHelp: {
+    if (!showingHelp) return Model.emptyList()
     var rows = [
       { keys: "j k", action: "Move" },
       { keys: "Enter", action: "Open in browser" },
@@ -43,7 +55,15 @@ Panel {
       { keys: "a", action: "Send to agent" }
     ]
     if (canMarkSelected) rows = rows.concat([{ keys: "m", action: "Mark this as read" }])
-    if (service.unreadCount > 0) rows = rows.concat([{ keys: "M", action: "Mark all as read" }])
+    if (Model.unreadCount(service.notifications, profileFilter) > 0)
+      rows = rows.concat([{ keys: "M", action: "Mark all as read" }])
+    if (!needsSetup) {
+      rows = rows.concat([
+        { keys: "1-9", action: "Switch account" },
+        { keys: "s", action: "Accounts" }
+      ])
+      if (service.profiles.length > 0) rows = rows.concat([{ keys: "[ ]", action: "Cycle account" }])
+    }
     return rows.concat([
       { keys: "h l", action: "New / older" },
       { keys: "r", action: "Refresh" },
@@ -68,6 +88,8 @@ Panel {
     if (rotatingPhrases) return loadingPhrases[phraseIndex % loadingPhrases.length]
     if (!service.installed) return "CLI not installed"
     if (!service.authenticated) return "Sign in to Fizzy"
+    var names = Model.heroAccountText(service.profiles, profileFilter)
+    if (names !== "") return names
     if (service.accountName !== "") return service.accountName
     return "Fizzy.do"
   }
@@ -98,6 +120,7 @@ Panel {
 
   function setStateFilter(value) {
     showingHelp = false
+    closeAccounts()
     peeking = false
     service.closePeek()
     stateFilter = String(value || "unread")
@@ -105,6 +128,27 @@ Panel {
     cursorActive = false
     pointerGate.reset()
     if (panelFlick) panelFlick.contentY = 0
+  }
+
+  function setProfileFilter(value) {
+    if (root.needsSetup) return
+    var next = Model.safeCliToken(value)
+    showingHelp = false
+    peeking = false
+    service.closePeek()
+    if (next !== profileFilter) {
+      profileFilter = next
+      selectedIndex = 0
+      cursorActive = false
+      pointerGate.reset()
+      if (panelFlick) panelFlick.contentY = 0
+    }
+    closeAccounts()
+  }
+
+  function cycleProfileFilter(delta) {
+    if (overlayOpen || service.profiles.length < 1) return
+    setProfileFilter(Model.cycleProfileFilter(service.profiles, profileFilter, delta))
   }
 
   function cycleStateFilter(delta) {
@@ -143,7 +187,116 @@ Panel {
     return selectedItem
   }
 
+  function closeAccounts() {
+    showingAccounts = false
+    addingAccount = false
+    confirmingRemove = false
+    addName = ""
+  }
+
+  function selectedAccountIndex() {
+    var rows = accountRows
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && rows[i].selected && rows[i].kind !== "add") return i
+    }
+    return 0
+  }
+
+  function toggleAccounts() {
+    if (root.needsSetup) {
+      service.beginSetup()
+      return
+    }
+    if (showingAccounts) {
+      closeAccounts()
+      return
+    }
+    showingHelp = false
+    peeking = false
+    service.closePeek()
+    confirmingRemove = false
+    addingAccount = false
+    showingAccounts = true
+    accountIndex = selectedAccountIndex()
+  }
+
+  function moveAccountSelection(delta) {
+    if (!showingAccounts || addingAccount || confirmingRemove) return
+    var rows = accountRows
+    if (rows.length === 0) return
+    accountIndex = Math.max(0, Math.min(rows.length - 1, accountIndex + Number(delta)))
+  }
+
+  function activateAccountSelection() {
+    if (!showingAccounts) return
+    if (confirmingRemove) {
+      confirmRemoveAccount()
+      return
+    }
+    if (addingAccount) {
+      submitAddAccount()
+      return
+    }
+    var row = accountRows[accountIndex]
+    if (!row) return
+    if (row.kind === "add") {
+      startAddAccount()
+      return
+    }
+    setProfileFilter(row.profile)
+  }
+
+  function jumpAccountDigit(digit) {
+    if (showingHelp || addingAccount || confirmingRemove) return
+    if (root.needsSetup) return
+    var next = Model.profileForDigit(service.profiles, digit)
+    if (next === null) return
+    setProfileFilter(next)
+  }
+
+  function startAddAccount() {
+    if (!showingAccounts || confirmingRemove) return
+    confirmingRemove = false
+    addingAccount = true
+    addName = ""
+  }
+
+  function submitAddAccount() {
+    var token = Model.safeCliToken(addName)
+    if (token === "") return
+    if (!service.beginAddProfile(token)) return
+    addingAccount = false
+    addName = ""
+  }
+
+  function cancelAccountEdit() {
+    addingAccount = false
+    confirmingRemove = false
+    addName = ""
+  }
+
+  function startRemoveAccount() {
+    if (!showingAccounts || addingAccount) return
+    var row = accountRows[accountIndex]
+    if (!row || row.kind !== "profile") return
+    confirmingRemove = true
+  }
+
+  function confirmRemoveAccount() {
+    var row = accountRows[accountIndex]
+    if (!row || row.kind !== "profile") {
+      confirmingRemove = false
+      return
+    }
+    service.logoutProfile(row.profile)
+    confirmingRemove = false
+  }
+
   function activateSelection() {
+    if (showingAccounts) {
+      activateAccountSelection()
+      return
+    }
     if (showingHelp) return
     if (root.needsSetup) {
       if (!cursorActive) return
@@ -157,7 +310,7 @@ Panel {
   }
 
   function togglePeek() {
-    if (showingHelp || root.needsSetup) return
+    if (overlayOpen || root.needsSetup) return
     if (peeking) {
       peeking = false
       service.closePeek()
@@ -170,6 +323,14 @@ Panel {
   }
 
   function closePeekOrPanel() {
+    if (addingAccount || confirmingRemove) {
+      cancelAccountEdit()
+      return
+    }
+    if (showingAccounts) {
+      closeAccounts()
+      return
+    }
     if (showingHelp) {
       showingHelp = false
       return
@@ -183,32 +344,33 @@ Panel {
   }
 
   function copySelected() {
-    if (showingHelp) return
+    if (overlayOpen) return
     var item = peekTarget()
     if (!item) return
     service.copyCardLink(item)
   }
 
   function sendSelectedToAgent() {
-    if (showingHelp) return
+    if (overlayOpen) return
     var item = peekTarget()
     if (!item) return
     if (service.sendToAgent(item)) root.close()
   }
 
   function markSelectedRead() {
-    if (showingHelp) return
+    if (overlayOpen) return
     var item = peekTarget()
     if (!item) return
     if (item.unread) service.markRead(item)
   }
 
   function markAllRead() {
-    if (showingHelp || root.needsSetup) return
-    service.markAllRead()
+    if (overlayOpen || root.needsSetup) return
+    service.markAllRead(root.profileFilter)
   }
 
   function toggleHelp() {
+    if (showingAccounts) closeAccounts()
     showingHelp = !showingHelp
   }
 
@@ -238,6 +400,7 @@ Panel {
       cursorActive = false
       peeking = false
       showingHelp = false
+      closeAccounts()
       enterHandled = false
       nowMs = Date.now()
       if (panelFlick) panelFlick.contentY = 0
@@ -246,11 +409,20 @@ Panel {
     } else {
       peeking = false
       showingHelp = false
+      closeAccounts()
       service.closePeek()
     }
   }
 
   onFilteredNotificationsChanged: ensureSelection()
+
+  Connections {
+    target: service
+    function onProfilesChanged() {
+      if (root.profileFilter !== "" && !Model.profileKnown(service.profiles, root.profileFilter))
+        root.profileFilter = ""
+    }
+  }
 
   PointerMoveGate {
     id: pointerGate
@@ -262,6 +434,11 @@ Panel {
     settings: root.settings
   }
 
+  // Repeater delegates shadow property names; these aliases keep the row
+  // from self-binding `service: service` / `pointerGate: pointerGate` to undefined.
+  readonly property var fizzyService: service
+  readonly property var rowPointerGate: pointerGate
+
   Timer {
     interval: 60000
     repeat: true
@@ -272,7 +449,7 @@ Panel {
   Timer {
     interval: 4000
     repeat: true
-    running: root.opened && root.needsSetup
+    running: root.opened && (root.needsSetup || service.awaitingProfile !== "")
     onTriggered: service.refresh()
   }
 
@@ -334,11 +511,13 @@ Panel {
     function unread(): int { return service.unreadCount }
     function status(): string {
       return JSON.stringify({
-        account: service.accountName,
+        account: Model.heroAccountText(service.profiles, root.profileFilter) || service.accountName,
         notifications: service.notifications.length,
         unread: service.unreadCount,
         visible: root.filteredNotifications.length,
         stateFilter: root.stateFilter,
+        profileFilter: root.profileFilter,
+        profiles: service.profiles.length,
         refreshing: service.refreshing,
         error: service.lastError,
         setup: service.setupKind
@@ -384,7 +563,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.addingAccount
       onMoveRequested: function(dx, dy) {
+        if (root.showingAccounts) {
+          if (dy !== 0) root.moveAccountSelection(dy)
+          return
+        }
         if (dy !== 0) root.moveSelection(dy)
         else if (dx !== 0) root.cycleStateFilter(dx)
       }
@@ -397,20 +581,26 @@ Panel {
           root.enterHandled = false
           return
         }
-        root.togglePeek()
+        if (root.showingAccounts) root.activateAccountSelection()
+        else root.togglePeek()
       }
+      onDeleteRequested: root.startRemoveAccount()
       onCloseRequested: root.closePeekOrPanel()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
-        if (text === "r" || text === "R") service.refresh()
-        else if ((text === "s" || text === "S") && root.needsSetup) service.beginSetup()
-        else if (text === "u" || text === "U") root.setStateFilter("unread")
-        else if (text === "p" || text === "P") root.setStateFilter("previous")
+        if (text >= "1" && text <= "9") root.jumpAccountDigit(text)
+        else if (text === "r" || text === "R") service.refresh()
+        else if (text === "s" || text === "S") root.toggleAccounts()
+        else if ((text === "n" || text === "N") && root.showingAccounts) root.startAddAccount()
+        else if ((text === "u" || text === "U") && !root.showingAccounts) root.setStateFilter("unread")
+        else if ((text === "p" || text === "P") && !root.showingAccounts) root.setStateFilter("previous")
         else if (text === "m") root.markSelectedRead()
         else if (text === "M") root.markAllRead()
         else if (text === "c" || text === "C") root.copySelected()
         else if (text === "a" || text === "A") root.sendSelectedToAgent()
         else if (text === "?") root.toggleHelp()
+        else if (text === "[") root.cycleProfileFilter(-1)
+        else if (text === "]") root.cycleProfileFilter(1)
       }
 
       ColumnLayout {
@@ -425,7 +615,7 @@ Panel {
 
           Item {
             width: parent.width
-            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, helpButton.implicitHeight, refreshButton.implicitHeight)
+            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, accountsButton.implicitHeight, helpButton.implicitHeight, refreshButton.implicitHeight)
 
             FizzyIcon {
               id: heroIcon
@@ -439,7 +629,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: helpButton.left
+              anchors.right: accountsButton.visible ? accountsButton.left : helpButton.left
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -464,6 +654,19 @@ Panel {
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
               }
+            }
+
+            PanelActionButton {
+              id: accountsButton
+              visible: !root.needsSetup
+              anchors.right: helpButton.left
+              anchors.rightMargin: Style.space(2)
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰀉"
+              tooltipText: "Accounts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleAccounts()
             }
 
             PanelActionButton {
@@ -544,14 +747,14 @@ Panel {
             spacing: Style.space(12)
 
             SetupCard {
-              visible: !root.showingHelp && root.needsSetup
+              visible: !root.overlayOpen && root.needsSetup
               width: parent.width
               panel: root
               service: service
             }
 
             Text {
-              visible: !root.showingHelp && !root.peeking && !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.overlayOpen && !root.peeking && !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
               width: parent.width
               text: root.emptyMessage()
               color: root.dim
@@ -564,7 +767,7 @@ Panel {
             }
 
             Text {
-              visible: !root.showingHelp && !root.peeking && !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
+              visible: !root.overlayOpen && !root.peeking && !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
               width: parent.width
               text: service.lastError
               color: root.urgent
@@ -583,8 +786,15 @@ Panel {
               panel: root
             }
 
+            AccountsView {
+              visible: root.showingAccounts
+              width: parent.width
+              panel: root
+              service: service
+            }
+
             PeekView {
-              visible: !root.showingHelp && root.peeking && !root.needsSetup
+              visible: !root.overlayOpen && root.peeking && !root.needsSetup
               width: parent.width
               panel: root
               service: service
@@ -592,7 +802,7 @@ Panel {
 
             Column {
               id: notificationColumn
-              visible: !root.showingHelp && !root.peeking && !root.needsSetup && root.filteredNotifications.length > 0
+              visible: !root.overlayOpen && !root.peeking && !root.needsSetup && root.filteredNotifications.length > 0
               width: parent.width
               spacing: Style.space(8)
 
@@ -602,8 +812,8 @@ Panel {
                 NotificationRow {
                   width: notificationColumn.width
                   panel: root
-                  service: service
-                  pointerGate: pointerGate
+                  service: root.fizzyService
+                  pointerGate: root.rowPointerGate
                 }
               }
             }

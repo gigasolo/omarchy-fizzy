@@ -77,12 +77,12 @@ function emptyIdentity(overrides) {
   return result
 }
 
-function interpretIdentity(raw, exitCode) {
+function interpretIdentity(raw, exitCode, accountId) {
   if (isMissingCli(raw, exitCode)) {
     return emptyIdentity({ installed: false, setupKind: "missing_cli" })
   }
 
-  var parsed = parseIdentity(raw)
+  var parsed = parseIdentity(raw, accountId)
   if (parsed.ok) {
     return {
       ok: true,
@@ -126,13 +126,30 @@ function setupGuide(kind) {
   return { kind: "", hero: "", title: "", detail: "", action: "", commands: [] }
 }
 
-function parseIdentity(raw) {
+function accountMatchesId(account, accountId) {
+  var wanted = String(accountId || "").replace(/^\//, "")
+  if (wanted === "") return false
+  var slug = String(account && account.slug ? account.slug : "").replace(/^\//, "")
+  var id = String(account && account.id ? account.id : "")
+  return slug === wanted || id === wanted || slug.slice(-wanted.length) === wanted
+}
+
+function parseIdentity(raw, accountId) {
   var result = parseJson(raw)
   if (!result.ok) return { ok: false, error: result.error, code: result.code || "", account: null, user: null }
 
   var data = result.value.data || {}
   var accounts = Array.isArray(data.accounts) ? data.accounts : []
-  var first = accounts[0]
+  var chosen = null
+  if (accountId) {
+    for (var i = 0; i < accounts.length; i++) {
+      if (accounts[i] && accounts[i].id && accountMatchesId(accounts[i], accountId)) {
+        chosen = accounts[i]
+        break
+      }
+    }
+  }
+  var first = chosen || accounts[0]
   if (!first || !first.id) {
     return { ok: false, error: "No Fizzy account found. Run fizzy setup.", code: "auth_required", account: null, user: null }
   }
@@ -152,6 +169,63 @@ function parseIdentity(raw) {
       name: cleanText(user.name || "")
     }
   }
+}
+
+function parseAuthList(raw) {
+  var result = parseJson(raw)
+  if (!result.ok) return { ok: false, error: result.error, code: result.code || "", profiles: [] }
+
+  var data = result.value.data
+  var source = []
+  if (Array.isArray(data)) source = data
+  else if (data && Array.isArray(data.profiles)) source = data.profiles
+
+  var profiles = []
+  for (var i = 0; i < source.length; i++) {
+    var row = source[i] || {}
+    if (row.has_token !== true) continue
+    var name = safeCliToken(row.profile)
+    if (name === "") continue
+    profiles.push({
+      profile: name,
+      accountId: String(row.account || "").replace(/^\//, ""),
+      active: row.active === true
+    })
+  }
+
+  if (profiles.length === 0) {
+    return { ok: false, error: "Not authenticated. Run fizzy setup.", code: "auth_required", profiles: [] }
+  }
+
+  return { ok: true, error: "", code: "", profiles: profiles }
+}
+
+function fizzyArgs(subcommand, profile) {
+  var cmd = ["fizzy"]
+  var token = safeCliToken(profile)
+  if (token !== "") {
+    cmd.push("--profile")
+    cmd.push(token)
+  }
+  var parts = Array.isArray(subcommand) ? subcommand : []
+  for (var i = 0; i < parts.length; i++) cmd.push(parts[i])
+  return cmd
+}
+
+function stampNotifications(items, identity) {
+  var source = Array.isArray(items) ? items : []
+  var profile = safeCliToken(identity && identity.profile)
+  var accountName = clip(cleanText(identity && identity.accountName ? identity.accountName : ""), 80)
+  var accountId = String(identity && identity.accountId ? identity.accountId : "").replace(/^\//, "")
+  var stamped = []
+  for (var i = 0; i < source.length; i++) {
+    stamped.push(copyWith(source[i], {
+      profile: profile,
+      accountName: accountName,
+      accountId: accountId
+    }))
+  }
+  return stamped
 }
 
 function parseNotifications(raw, limit) {
@@ -218,21 +292,176 @@ function sortNotifications(items) {
   return sorted
 }
 
-function filterNotifications(items, state) {
+function filterNotifications(items, state, profile) {
   var source = Array.isArray(items) ? items : []
   var selected = String(state || "all")
+  var wanted = safeCliToken(profile)
   return source.filter(function(item) {
+    if (wanted !== "" && String(item.profile || "") !== wanted) return false
     if (selected === "unread") return item.unread === true
     if (selected === "previous") return item.unread !== true
     return true
   })
 }
 
-function unreadCount(items) {
+function unreadCount(items, profile) {
   var source = Array.isArray(items) ? items : []
+  var wanted = safeCliToken(profile)
   var count = 0
-  for (var i = 0; i < source.length; i++) if (source[i] && source[i].unread === true) count += 1
+  for (var i = 0; i < source.length; i++) {
+    var item = source[i]
+    if (!item || item.unread !== true) continue
+    if (wanted !== "" && String(item.profile || "") !== wanted) continue
+    count += 1
+  }
   return count
+}
+
+function unreadProfileNames(items, profile) {
+  var source = Array.isArray(items) ? items : []
+  var wanted = safeCliToken(profile)
+  var names = []
+  var seen = Object.create(null)
+  for (var i = 0; i < source.length; i++) {
+    var item = source[i] || {}
+    if (item.unread !== true) continue
+    var name = safeCliToken(item.profile)
+    if (name === "") continue
+    if (wanted !== "" && name !== wanted) continue
+    if (seen[name]) continue
+    seen[name] = true
+    names.push(name)
+  }
+  return names
+}
+
+function heroAccountText(profiles, profileFilter) {
+  var source = Array.isArray(profiles) ? profiles : []
+  if (source.length === 0) return ""
+  var wanted = safeCliToken(profileFilter)
+  if (wanted !== "") {
+    for (var i = 0; i < source.length; i++) {
+      var row = source[i] || {}
+      if (safeCliToken(row.profile) !== wanted) continue
+      return clip(cleanText(row.accountName || row.profile || ""), 80)
+    }
+    return ""
+  }
+  if (source.length === 1) return clip(cleanText(source[0].accountName || source[0].profile || ""), 80)
+  return "All"
+}
+
+function cycleProfileFilter(profiles, current, delta) {
+  var source = Array.isArray(profiles) ? profiles : []
+  if (source.length < 1) return ""
+  var order = [""]
+  for (var i = 0; i < source.length; i++) {
+    var name = safeCliToken(source[i] && source[i].profile)
+    if (name !== "") order.push(name)
+  }
+  if (order.length < 2) return ""
+  var selected = safeCliToken(current)
+  var index = 0
+  for (var j = 0; j < order.length; j++) {
+    if (order[j] === selected) {
+      index = j
+      break
+    }
+  }
+  var step = Number(delta)
+  if (!isFinite(step) || step === 0) step = 1
+  var next = (index + step) % order.length
+  if (next < 0) next += order.length
+  return order[next]
+}
+
+function profileForDigit(profiles, digit) {
+  var n = parseInt(String(digit), 10)
+  if (!isFinite(n) || n < 1 || n > 9) return null
+  if (n === 1) return ""
+  var source = Array.isArray(profiles) ? profiles : []
+  var row = source[n - 2]
+  var name = safeCliToken(row && row.profile)
+  return name === "" ? null : name
+}
+
+function accountSwitcherRows(profiles, notifications, profileFilter) {
+  var source = Array.isArray(profiles) ? profiles : []
+  var items = Array.isArray(notifications) ? notifications : []
+  var wanted = safeCliToken(profileFilter)
+  var unreadByProfile = Object.create(null)
+  var totalUnread = 0
+  for (var n = 0; n < items.length; n++) {
+    var item = items[n]
+    if (!item || item.unread !== true) continue
+    totalUnread += 1
+    var itemProfile = safeCliToken(item.profile)
+    if (itemProfile !== "") unreadByProfile[itemProfile] = (unreadByProfile[itemProfile] || 0) + 1
+  }
+  var rows = [{
+    kind: "all",
+    profile: "",
+    label: "All",
+    number: 1,
+    unread: totalUnread,
+    selected: wanted === "",
+    active: false
+  }]
+  for (var i = 0; i < source.length; i++) {
+    var row = source[i] || {}
+    var name = safeCliToken(row.profile)
+    if (name === "") continue
+    var number = i + 2
+    rows.push({
+      kind: "profile",
+      profile: name,
+      label: clip(cleanText(row.accountName || name), 80),
+      number: number <= 9 ? number : 0,
+      unread: unreadByProfile[name] || 0,
+      selected: wanted === name,
+      active: row.active === true
+    })
+  }
+  rows.push({
+    kind: "add",
+    profile: "",
+    label: "Add account",
+    number: 0,
+    unread: 0,
+    selected: false,
+    active: false
+  })
+  return rows
+}
+
+function removeConfirmDetail(row) {
+  if (!row || row.kind !== "profile") return ""
+  var name = clip(cleanText(row.label || row.profile || "this account"), 80)
+  var text = "This signs the Fizzy CLI out of " + name + "."
+  if (row.active === true) text += " Terminals that run fizzy without --profile will be signed out too."
+  return text
+}
+
+function profileKnown(profiles, profile) {
+  var wanted = safeCliToken(profile)
+  if (wanted === "") return false
+  var source = Array.isArray(profiles) ? profiles : []
+  for (var i = 0; i < source.length; i++) {
+    if (safeCliToken(source[i] && source[i].profile) === wanted) return true
+  }
+  return false
+}
+
+function accountNameForProfile(profiles, profile) {
+  var wanted = safeCliToken(profile)
+  if (wanted === "") return ""
+  var source = Array.isArray(profiles) ? profiles : []
+  for (var i = 0; i < source.length; i++) {
+    var row = source[i] || {}
+    if (safeCliToken(row.profile) !== wanted) continue
+    return clip(cleanText(row.accountName || ""), 80)
+  }
+  return ""
 }
 
 function copyWith(value, overrides) {
@@ -258,11 +487,14 @@ function withItemRead(items, id) {
   return changed
 }
 
-function withAllRead(items) {
+function withAllRead(items, profile) {
   var source = Array.isArray(items) ? items : []
+  var wanted = safeCliToken(profile)
   var changed = []
   for (var i = 0; i < source.length; i++) {
-    changed.push(copyWith(source[i], { unread: false, unreadCount: 0 }))
+    var existing = source[i] || {}
+    if (wanted !== "" && String(existing.profile || "") !== wanted) changed.push(existing)
+    else changed.push(copyWith(existing, { unread: false, unreadCount: 0 }))
   }
   return changed
 }
@@ -417,14 +649,16 @@ function notificationTime(timestampMs, nowMs) {
   return label
 }
 
-function notificationMeta(item, nowMs) {
+function notificationMeta(item, nowMs, options) {
   if (!item) return ""
   var parts = []
   var age = notificationTime(item.timestampMs, nowMs)
   var creator = cleanText(item.creator || "")
+  var account = options && options.includeAccount ? cleanText(item.accountName || "") : ""
   var board = cleanText(item.boardName || "")
   if (age !== "") parts.push(age)
   if (creator !== "") parts.push(creator)
+  if (account !== "") parts.push(account)
   if (board !== "") parts.push(board)
   return parts.join(" • ")
 }
@@ -507,6 +741,13 @@ function emptyList() {
   return EMPTY_LIST
 }
 
+function peekCacheKey(profile, cardNumber) {
+  var name = safeCliToken(profile)
+  var number = positiveInteger(cardNumber, 0)
+  if (name === "" || !number) return ""
+  return name + ":" + number
+}
+
 function peekCacheGet(cache, key) {
   if (!cache || !cache.values) return null
   var id = String(key || "")
@@ -569,6 +810,10 @@ function positiveInteger(value, fallback) {
 if (typeof module !== "undefined") {
   module.exports = {
     parseIdentity: parseIdentity,
+    parseAuthList: parseAuthList,
+    fizzyArgs: fizzyArgs,
+    stampNotifications: stampNotifications,
+    peekCacheKey: peekCacheKey,
     interpretIdentity: interpretIdentity,
     interpretCliFailure: interpretCliFailure,
     setupGuide: setupGuide,
@@ -577,6 +822,14 @@ if (typeof module !== "undefined") {
     sortNotifications: sortNotifications,
     filterNotifications: filterNotifications,
     unreadCount: unreadCount,
+    unreadProfileNames: unreadProfileNames,
+    heroAccountText: heroAccountText,
+    cycleProfileFilter: cycleProfileFilter,
+    profileForDigit: profileForDigit,
+    accountSwitcherRows: accountSwitcherRows,
+    removeConfirmDetail: removeConfirmDetail,
+    profileKnown: profileKnown,
+    accountNameForProfile: accountNameForProfile,
     withItemRead: withItemRead,
     withAllRead: withAllRead,
     copyWith: copyWith,

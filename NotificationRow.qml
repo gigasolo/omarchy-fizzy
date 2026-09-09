@@ -101,7 +101,7 @@ CursorSurface {
 
       Text {
         Layout.fillWidth: true
-        text: Model.notificationMeta(root.modelData, root.panel.nowMs)
+        text: Model.notificationMeta(root.modelData, root.panel.nowMs, { includeAccount: root.panel.showAccountMeta })
         color: root.panel.dim
         font.family: root.panel.fontFamily
         font.pixelSize: Style.font.caption
