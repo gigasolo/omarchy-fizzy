@@ -1,38 +1,87 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "Model.js" as Model
 
 Item {
   id: root
 
   property var settings: ({})
+  property bool panelOpen: false
   property bool refreshing: false
   property bool installed: true
   property bool authenticated: false
   property string setupKind: ""
   property var account: null
   property var user: null
+  property var profiles: []
   property var notifications: []
   property int unreadCount: 0
   property date lastUpdated: new Date(0)
   property string lastError: ""
   property string actionStatus: ""
+  property string awaitingProfile: ""
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 300, 60, 3600)
   readonly property int maxItems: intSetting("maxItems", 40, 5, 100)
   readonly property string accountName: account && account.name ? account.name : ""
   readonly property string userName: user && user.name ? user.name : ""
+  readonly property int cliOutputLimit: Model.cliOutputLimit()
 
+  property bool _cliReady: false
+  property bool _fizzyOnPath: false
+  property int _probeGen: 0
+  property int _whichGen: 0
+  property int _authGen: 0
+  property int _identityGen: 0
+  property int _listGen: 0
+  property bool _recoverWhich: false
+  property string _authOutput: ""
+  property string _authError: ""
+  property bool _authOverflow: false
   property string _identityOutput: ""
   property string _identityError: ""
+  property bool _identityOverflow: false
   property string _listOutput: ""
   property string _listError: ""
+  property bool _listOverflow: false
+  property var _profileQueue: []
+  property var _currentProfile: null
+  property var _mergedItems: []
+  property var _collectedProfiles: []
+  property var _profileErrors: []
   property var _readQueue: []
   property var _readingNotification: null
   property string _readOutput: ""
   property string _readError: ""
+  property bool _readOverflow: false
   property bool _readAll: false
+  property var _readAllQueue: []
+  property string _logoutProfile: ""
+  property string _logoutOutput: ""
+  property string _logoutError: ""
+  property bool _logoutOverflow: false
+  property var peek: null
+  property var _peekCache: Model.emptyCache()
+  property var _peekItem: null
+  readonly property var peekItem: _peekItem
+  property var _pendingPeekItem: null
+  property bool _peekAbandoned: false
+  property int _peekCardNumber: 0
+  property string _peekProfile: ""
+  property int _peekGen: 0
+  property int _cardShowGen: 0
+  property int _commentGen: 0
+  property int _peekLive: 0
+  property var _notificationsBeforeAll: null
+  property bool _peekUnreadBeforeAll: false
+  property string _cardShowOutput: ""
+  property string _cardShowError: ""
+  property bool _cardShowOverflow: false
+  property string _commentOutput: ""
+  property string _commentError: ""
+  property bool _commentOverflow: false
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -50,20 +99,157 @@ Item {
     return text.length > 180 ? text.substring(0, 177) + "…" : text
   }
 
+  function stopProcess(proc) {
+    if (proc && proc.running) proc.running = false
+  }
+
+  function takeBounded(current, chunk, proc, overflowFlagSetter) {
+    var result = Model.appendBounded(current, chunk, root.cliOutputLimit)
+    if (result.overflow) {
+      overflowFlagSetter()
+      stopProcess(proc)
+      // stopProcess may run onExited now; do not restash the truncated buffer.
+      return ""
+    }
+    return result.text
+  }
+
   function refreshIfStale() {
     var updatedAt = lastUpdated instanceof Date ? lastUpdated.getTime() : 0
     if (updatedAt <= 0 || Date.now() - updatedAt >= refreshIntervalSec * 1000) refresh()
   }
 
+  function beginProbe() {
+    _probeGen += 1
+    return _probeGen
+  }
+
+  function probeCurrent(gen) {
+    return gen === _probeGen
+  }
+
+  function probeBusy() {
+    return whichProcess.running || authListProcess.running || identityProcess.running || listProcess.running
+  }
+
+  function resetFanout() {
+    _profileQueue = []
+    _currentProfile = null
+    _mergedItems = []
+    _collectedProfiles = []
+    _profileErrors = []
+  }
+
+  function currentProfileName() {
+    return _currentProfile && _currentProfile.profile ? _currentProfile.profile : ""
+  }
+
+  function profileLabel() {
+    if (_currentProfile && _currentProfile.accountName) return _currentProfile.accountName
+    return currentProfileName() || "Fizzy"
+  }
+
+  function collectCurrentProfile() {
+    var name = currentProfileName()
+    if (name === "") return
+    var collected = _collectedProfiles
+    for (var i = 0; i < collected.length; i++) {
+      if (collected[i] && collected[i].profile === name) return
+    }
+    var next = collected.slice()
+    next.push({
+      profile: name,
+      accountId: String(_currentProfile.accountId || ""),
+      accountName: _currentProfile.accountName || name,
+      active: _currentProfile.active === true
+    })
+    _collectedProfiles = next
+  }
+
+  function noteProfileError(label, message) {
+    var text = conciseError(message, "Could not load " + (label || "Fizzy"))
+    var next = _profileErrors.slice()
+    next.push((label || "Fizzy") + ": " + text)
+    _profileErrors = next
+  }
+
+  function tryRecoverWhich() {
+    if (!_recoverWhich || probeBusy()) return
+    _recoverWhich = false
+    refreshing = true
+    lastError = lastError || "Timed out talking to Fizzy"
+    startWhich()
+  }
+
   function refresh() {
-    if (whichProcess.running || identityProcess.running || listProcess.running) return
+    if (probeBusy()) return
     refreshing = true
     lastError = ""
+    beginProbe()
+    resetFanout()
+    probeWatchdog.restart()
+    if (_fizzyOnPath || (_cliReady && installed)) startAuthList()
+    else startWhich()
+  }
+
+  function startWhich() {
+    _whichGen = _probeGen
     _identityOutput = ""
     _identityError = ""
+    _identityOverflow = false
+    // `fizzy` with no binary can hang a Quickshell Process.
     whichProcess.command = ["which", "fizzy"]
     whichProcess.running = true
     probeWatchdog.restart()
+  }
+
+  function startAuthList() {
+    _authGen = _probeGen
+    _authOutput = ""
+    _authError = ""
+    _authOverflow = false
+    authListProcess.command = Model.fizzyArgs(["auth", "list", "--json"], "")
+    authListProcess.running = true
+    probeWatchdog.restart()
+  }
+
+  function startIdentity() {
+    _identityGen = _probeGen
+    _identityOutput = ""
+    _identityError = ""
+    _identityOverflow = false
+    identityProcess.command = Model.fizzyArgs(["identity", "show", "--json"], currentProfileName())
+    identityProcess.running = true
+    probeWatchdog.restart()
+  }
+
+  function startNotificationList() {
+    _listGen = _probeGen
+    _listOutput = ""
+    _listError = ""
+    _listOverflow = false
+    listProcess.command = Model.fizzyArgs(["notification", "list", "--limit", String(root.maxItems), "--json"], currentProfileName())
+    listProcess.running = true
+    probeWatchdog.restart()
+  }
+
+  function startNextProfile() {
+    if (_profileQueue.length === 0) {
+      finishFanout()
+      return
+    }
+    var next = _profileQueue[0]
+    _profileQueue = _profileQueue.slice(1)
+    _currentProfile = Model.copyWith(next, {})
+    // Last successful fan-out already stored the human account name.
+    var known = Model.accountNameForProfile(profiles, currentProfileName())
+    if (known !== "") {
+      _currentProfile.accountName = known
+      collectCurrentProfile()
+      startNotificationList()
+      return
+    }
+    startIdentity()
   }
 
   function applyIdentityResult(raw, exitCode) {
@@ -71,7 +257,10 @@ Item {
     installed = parsed.installed
     authenticated = parsed.authenticated
     setupKind = parsed.setupKind
+    resetFanout()
     if (!parsed.ok) {
+      _cliReady = false
+      if (parsed.setupKind === "missing_cli") _fizzyOnPath = false
       lastError = parsed.error
       refreshing = false
       probeWatchdog.stop()
@@ -81,10 +270,156 @@ Item {
     account = parsed.account
     user = parsed.user
     lastError = ""
-    _listOutput = ""
-    _listError = ""
-    listProcess.command = ["fizzy", "notification", "list", "--json"]
-    listProcess.running = true
+    refreshing = false
+    probeWatchdog.stop()
+  }
+
+  function applyAuthList(raw, exitCode, overflow) {
+    if (overflow) {
+      _cliReady = false
+      lastError = "Fizzy CLI output was too large"
+      refreshing = false
+      probeWatchdog.stop()
+      return
+    }
+    if (Model.isMissingCli(raw, exitCode) || exitCode === 127) {
+      applyIdentityResult("", 127)
+      return
+    }
+    if (exitCode !== 0) {
+      applyCliFailure(raw, exitCode, "Could not list Fizzy profiles")
+      refreshing = false
+      probeWatchdog.stop()
+      return
+    }
+    var parsed = Model.parseAuthList(raw)
+    if (!parsed.ok) {
+      if (parsed.code === "auth_required") {
+        authenticated = false
+        setupKind = "auth_required"
+        lastError = ""
+        _cliReady = false
+      } else {
+        lastError = conciseError(parsed.error, "Could not list Fizzy profiles")
+      }
+      refreshing = false
+      probeWatchdog.stop()
+      return
+    }
+    _profileQueue = parsed.profiles.slice()
+    _collectedProfiles = []
+    _mergedItems = []
+    _profileErrors = []
+    startNextProfile()
+  }
+
+  function applyProfileIdentity(raw, exitCode, overflow) {
+    if (overflow) {
+      noteProfileError(profileLabel(), "Fizzy CLI output was too large")
+      startNextProfile()
+      return
+    }
+    var parsed = Model.interpretIdentity(raw, exitCode, _currentProfile && _currentProfile.accountId)
+    if (!parsed.installed) {
+      applyIdentityResult(raw, exitCode)
+      return
+    }
+    if (!parsed.ok) {
+      noteProfileError(profileLabel(), parsed.error || "Could not read identity")
+      startNextProfile()
+      return
+    }
+    _currentProfile.accountName = parsed.account.name
+    if (parsed.account.slug) _currentProfile.accountId = String(parsed.account.slug).replace(/^\//, "")
+    account = parsed.account
+    user = parsed.user
+    collectCurrentProfile()
+    lastError = ""
+    startNotificationList()
+  }
+
+  function applyProfileList(raw, exitCode, overflow) {
+    if (overflow) {
+      noteProfileError(profileLabel(), "Fizzy CLI output was too large")
+      startNextProfile()
+      return
+    }
+    if (exitCode !== 0) {
+      var fail = Model.interpretCliFailure(raw, exitCode)
+      if (fail.kind === "missing_cli") {
+        applyIdentityResult("", 127)
+        return
+      }
+      noteProfileError(profileLabel(), fail.error || "Could not list Fizzy notifications")
+      startNextProfile()
+      return
+    }
+    var parsed = Model.parseNotifications(raw, root.maxItems)
+    if (!parsed.ok) {
+      noteProfileError(profileLabel(), parsed.error)
+      startNextProfile()
+      return
+    }
+    var stamped = Model.stampNotifications(parsed.items, {
+      profile: currentProfileName(),
+      accountName: _currentProfile && _currentProfile.accountName ? _currentProfile.accountName : "",
+      accountId: _currentProfile && _currentProfile.accountId ? _currentProfile.accountId : ""
+    })
+    _mergedItems = _mergedItems.concat(stamped)
+    collectCurrentProfile()
+    startNextProfile()
+  }
+
+  function finishFanout() {
+    if (_collectedProfiles.length === 0 && _mergedItems.length === 0) {
+      authenticated = false
+      _cliReady = false
+      if (_profileErrors.length > 0) {
+        lastError = _profileErrors[0]
+        setupKind = /fizzy setup|not authenticated/i.test(lastError) ? "auth_required" : ""
+      } else {
+        lastError = ""
+        setupKind = "auth_required"
+      }
+      refreshing = false
+      probeWatchdog.stop()
+      return
+    }
+
+    profiles = _collectedProfiles
+    var first = profiles[0]
+    if (first) {
+      account = { id: first.accountId, name: first.accountName, slug: first.accountId }
+    }
+    authenticated = true
+    installed = true
+    setupKind = ""
+    lastError = _profileErrors.length > 0
+      ? conciseError(_profileErrors.join(" · "), "Could not load every Fizzy account")
+      : ""
+    if (awaitingProfile !== "" && Model.profileKnown(profiles, awaitingProfile)) awaitingProfile = ""
+    finishRefresh(_mergedItems)
+  }
+
+  function applyCliFailure(raw, exitCode, fallback) {
+    var parsed = Model.interpretCliFailure(raw, exitCode)
+    if (parsed.kind === "missing_cli") {
+      _cliReady = false
+      _fizzyOnPath = false
+      installed = false
+      authenticated = false
+      setupKind = "missing_cli"
+      lastError = ""
+      return
+    }
+    if (parsed.kind === "auth_required") {
+      _cliReady = false
+      authenticated = false
+      setupKind = "auth_required"
+      lastError = ""
+      return
+    }
+    lastError = conciseError(parsed.error || fallback, fallback)
   }
 
   function beginSetup() {
@@ -108,12 +443,62 @@ Item {
     actionStatusTimer.restart()
   }
 
+  function beginAddProfile(name) {
+    var token = Model.safeCliToken(name)
+    if (token === "") return false
+    if (setupLaunchLock.running) return false
+    setupLaunchLock.restart()
+    awaitingProfile = token
+    Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.fizzy-setup"].concat(Model.fizzyArgs(["setup"], token)))
+    actionStatus = "Opened fizzy setup for " + token
+    actionStatusTimer.restart()
+    return true
+  }
+
+  function logoutProfile(name) {
+    var token = Model.safeCliToken(name)
+    if (token === "") return
+    if (probeBusy() || logoutProcess.running || readProcess.running) return
+    _logoutProfile = token
+    _logoutOutput = ""
+    _logoutError = ""
+    _logoutOverflow = false
+    actionStatusTimer.stop()
+    actionStatus = "Removing " + token + "…"
+    logoutProcess.command = Model.fizzyArgs(["auth", "logout", "--json"], token)
+    logoutProcess.running = true
+    armActionWatchdog()
+  }
+
+  function finishLogout(exitCode, stdout, stderr, overflow) {
+    var profile = _logoutProfile
+    _logoutProfile = ""
+    disarmActionWatchdog()
+    if (overflow) {
+      lastError = "Fizzy CLI output was too large"
+      actionStatus = lastError
+      actionStatusTimer.restart()
+      return
+    }
+    if (exitCode !== 0) {
+      lastError = conciseError(Model.friendlyCliError(stderr || stdout, "Could not remove the account"))
+      actionStatus = lastError
+      actionStatusTimer.restart()
+      return
+    }
+    actionStatus = "Removed " + profile
+    actionStatusTimer.restart()
+    refresh()
+  }
+
   function finishRefresh(items) {
     notifications = Model.sortNotifications(items)
     unreadCount = Model.unreadCount(notifications)
+    _cliReady = true
     refreshing = false
     lastUpdated = new Date()
     probeWatchdog.stop()
+    syncPeekItemFromNotifications()
   }
 
   function openNotification(item) {
@@ -123,8 +508,228 @@ Item {
     if (item.unread) markRead(item)
   }
 
+  function copyCardLink(item) {
+    var url = Model.cardLink(item)
+    if (url === "") {
+      actionStatus = "No card link to copy"
+      actionStatusTimer.restart()
+      return
+    }
+    Quickshell.execDetached(["wl-copy", "--", url])
+    actionStatus = "Copied card link"
+    actionStatusTimer.restart()
+  }
+
+  function sendToAgent(item) {
+    if (!item) return false
+    if (Model.cardLink(item) === "") {
+      actionStatus = "No card link to send"
+      actionStatusTimer.restart()
+      return false
+    }
+    var peekCard = peek && peek.cardNumber === item.cardNumber ? peek.card : null
+    Quickshell.execDetached(["omarchy-agent-prompt", Model.agentPrompt(item, peekCard)])
+    actionStatus = "Opened in agent"
+    actionStatusTimer.restart()
+    return true
+  }
+
+  function dropPeekIO() {
+    _cardShowOutput = ""
+    _cardShowError = ""
+    _commentOutput = ""
+    _commentError = ""
+    _cardShowOverflow = false
+    _commentOverflow = false
+  }
+
+  function beginPeekGen() {
+    _peekGen += 1
+    return _peekGen
+  }
+
+  function peekCurrent(gen) {
+    return gen === _peekGen
+  }
+
+  function peekWait() {
+    return cardShowProcess.running || commentListProcess.running || _peekLive > 0
+  }
+
+  function notePeekExit() {
+    if (_peekLive > 0) _peekLive -= 1
+  }
+
+  function closePeek() {
+    beginPeekGen()
+    _peekAbandoned = true
+    _pendingPeekItem = null
+    peek = null
+    _peekItem = null
+    _peekCardNumber = 0
+    _peekProfile = ""
+    peekWatchdog.stop()
+    stopProcess(cardShowProcess)
+    stopProcess(commentListProcess)
+    dropPeekIO()
+  }
+
+  function loadPeek(item) {
+    if (!panelOpen || !item) return
+    if (peekWait()) {
+      _pendingPeekItem = item
+      peekWatchdog.restart()
+      stopProcess(cardShowProcess)
+      stopProcess(commentListProcess)
+      return
+    }
+    beginPeek(item)
+  }
+
+  function beginPeek(item) {
+    if (!panelOpen || !item) return
+    beginPeekGen()
+    var number = Number(item.cardNumber || 0)
+    if (!number || Model.safeCliToken(number) === "") {
+      _pendingPeekItem = null
+      _peekAbandoned = false
+      _peekItem = item
+      _peekCardNumber = 0
+      _peekProfile = Model.safeCliToken(item.profile)
+      peek = { loading: false, error: "This notification has no card", card: null, comments: [], cardNumber: 0 }
+      peekWatchdog.stop()
+      dropPeekIO()
+      return
+    }
+    _pendingPeekItem = null
+    _peekAbandoned = false
+    _peekItem = item
+    _peekCardNumber = number
+    _peekProfile = Model.safeCliToken(item.profile)
+    var cacheKey = Model.peekCacheKey(_peekProfile, number)
+    var cached = cacheKey !== "" ? Model.peekCacheGet(_peekCache, cacheKey) : null
+    if (cached) {
+      peek = cached
+      _peekCache = Model.peekCacheTouch(_peekCache, cacheKey, Model.peekCacheLimit())
+      peekWatchdog.stop()
+      return
+    }
+    peek = {
+      loading: true,
+      error: "",
+      card: null,
+      comments: [],
+      cardNumber: number,
+      title: item.title,
+      boardName: item.boardName
+    }
+    _cardShowOutput = ""
+    _cardShowError = ""
+    _cardShowOverflow = false
+    _cardShowGen = _peekGen
+    _peekLive += 1
+    cardShowProcess.command = Model.fizzyArgs(["card", "show", Model.safeCliToken(number), "--json"], _peekProfile)
+    cardShowProcess.running = true
+    peekWatchdog.restart()
+  }
+
+  function takePendingPeek() {
+    var item = _pendingPeekItem
+    _pendingPeekItem = null
+    return item
+  }
+
+  function tryStartPendingPeek() {
+    if (!panelOpen) {
+      _pendingPeekItem = null
+      return false
+    }
+    if (peekWait()) return false
+    var item = takePendingPeek()
+    if (!item) return false
+    beginPeek(item)
+    return true
+  }
+
+  function failedPeek(message) {
+    _peekAbandoned = true
+    peek = {
+      loading: false,
+      error: conciseError(message, "Could not load the card"),
+      card: null,
+      comments: [],
+      cardNumber: _peekCardNumber
+    }
+    peekWatchdog.stop()
+    dropPeekIO()
+  }
+
+  function cachePeek(nextPeek) {
+    peek = nextPeek
+    peekWatchdog.stop()
+    dropPeekIO()
+    if (!nextPeek || nextPeek.loading || nextPeek.error || !nextPeek.cardNumber) return
+    var cacheKey = Model.peekCacheKey(_peekProfile, nextPeek.cardNumber)
+    if (cacheKey === "") return
+    _peekCache = Model.peekCachePut(_peekCache, cacheKey, nextPeek, Model.peekCacheLimit())
+  }
+
+  function readPending(id) {
+    var token = Model.safeCliToken(id)
+    if (token === "") return false
+    if (_readingNotification && String(_readingNotification.id) === token) return true
+    for (var i = 0; i < _readQueue.length; i++) {
+      if (String(_readQueue[i].id) === token) return true
+    }
+    return false
+  }
+
+  function applyPeekItemReadState(id, unread, unreadCount) {
+    if (!_peekItem) return
+    if (id !== undefined && id !== null && String(_peekItem.id) !== String(id)) return
+    var nextUnread = unread === true
+    var count = nextUnread ? Math.max(1, Number(unreadCount) || 1) : 0
+    _peekItem = Model.copyWith(_peekItem, { unread: nextUnread, unreadCount: count })
+  }
+
+  function markPeekItemRead(id) {
+    applyPeekItemReadState(id, false, 0)
+  }
+
+  function syncPeekItemFromNotifications() {
+    if (!_peekItem) return
+    if (_peekItem.unread !== true) return
+    var id = String(_peekItem.id || "")
+    if (id === "") return
+    var source = notifications
+    for (var i = 0; i < source.length; i++) {
+      var row = source[i]
+      if (row && String(row.id) === id) {
+        applyPeekItemReadState(id, row.unread === true, row.unreadCount)
+        return
+      }
+    }
+  }
+
+  function restoreNotification(item) {
+    if (!item || Model.safeCliToken(item.id) === "") return
+    var token = String(item.id)
+    var source = notifications
+    var changed = []
+    for (var i = 0; i < source.length; i++) {
+      var existing = source[i] || {}
+      if (String(existing.id) === token) changed.push(item)
+      else changed.push(existing)
+    }
+    notifications = changed
+    unreadCount = Model.unreadCount(notifications)
+    applyPeekItemReadState(token, item.unread === true, item.unreadCount)
+  }
+
   function markRead(item) {
     if (!item || !item.unread) return
+    if (Model.safeCliToken(item.id) === "") return
+    if (readPending(item.id)) return
     setReadOptimistically(item)
     var queue = _readQueue.slice()
     queue.push(item)
@@ -132,45 +737,52 @@ Item {
     runNextRead()
   }
 
-  function markAllRead() {
-    if (unreadCount === 0 || readProcess.running) return
-    var changed = []
-    for (var i = 0; i < notifications.length; i++) {
-      var existing = notifications[i]
-      var replacement = {}
-      for (var key in existing) replacement[key] = existing[key]
-      replacement.unread = false
-      replacement.unreadCount = 0
-      changed.push(replacement)
+  function markAllRead(profileFilter) {
+    if (readProcess.running) return
+    var wanted = Model.safeCliToken(profileFilter)
+    var visibleUnread = Model.unreadCount(notifications, wanted)
+    if (visibleUnread === 0) return
+    var targets = Model.unreadProfileNames(notifications, wanted)
+    if (targets.length === 0) targets = [""]
+    _notificationsBeforeAll = notifications
+    _peekUnreadBeforeAll = !!(_peekItem && _peekItem.unread)
+    notifications = Model.withAllRead(notifications, wanted)
+    unreadCount = Model.unreadCount(notifications)
+    _readQueue = []
+    if (wanted === "" || Model.safeCliToken(_peekItem && _peekItem.profile) === wanted) markPeekItemRead()
+    _readAll = true
+    _readAllQueue = targets
+    _readingNotification = null
+    runNextReadAll()
+  }
+
+  function runNextReadAll() {
+    if (readProcess.running) return
+    if (_readAllQueue.length === 0) {
+      _readAll = false
+      actionStatus = "Marked all as read"
+      actionStatusTimer.restart()
+      refreshAfterRead.restart()
+      return
     }
-    notifications = changed
-    unreadCount = 0
+    var profile = _readAllQueue[0]
+    _readAllQueue = _readAllQueue.slice(1)
     _readAll = true
     _readingNotification = null
     _readOutput = ""
     _readError = ""
+    _readOverflow = false
     actionStatusTimer.stop()
     actionStatus = "Marking all as read…"
-    readProcess.command = ["fizzy", "notification", "read-all", "--json"]
+    readProcess.command = Model.fizzyArgs(["notification", "read-all", "--json"], profile)
     readProcess.running = true
+    armActionWatchdog()
   }
 
   function setReadOptimistically(item) {
-    var changed = []
-    for (var i = 0; i < notifications.length; i++) {
-      var existing = notifications[i]
-      if (existing.id === item.id) {
-        var replacement = {}
-        for (var key in existing) replacement[key] = existing[key]
-        replacement.unread = false
-        replacement.unreadCount = 0
-        changed.push(replacement)
-      } else {
-        changed.push(existing)
-      }
-    }
-    notifications = changed
+    notifications = Model.withItemRead(notifications, item.id)
     unreadCount = Model.unreadCount(notifications)
+    markPeekItemRead(item.id)
   }
 
   function runNextRead() {
@@ -178,25 +790,82 @@ Item {
     var queue = _readQueue.slice()
     _readingNotification = queue.shift()
     _readQueue = queue
+    var id = Model.safeCliToken(_readingNotification && _readingNotification.id)
+    if (id === "") {
+      _readingNotification = null
+      if (_readQueue.length > 0) runNextRead()
+      return
+    }
     _readAll = false
     _readOutput = ""
     _readError = ""
+    _readOverflow = false
     actionStatusTimer.stop()
     actionStatus = "Marking notification as read…"
-    readProcess.command = ["fizzy", "notification", "read", String(_readingNotification.id), "--json"]
+    readProcess.command = Model.fizzyArgs(["notification", "read", id, "--json"], _readingNotification.profile)
     readProcess.running = true
+    armActionWatchdog()
   }
 
-  function finishRead(exitCode, stdout, stderr) {
-    if (exitCode !== 0) {
+  function actionBusy() {
+    return readProcess.running || logoutProcess.running
+  }
+
+  function armActionWatchdog() {
+    actionWatchdog.restart()
+  }
+
+  function disarmActionWatchdog() {
+    if (!actionBusy()) actionWatchdog.stop()
+  }
+
+  function finishRead(exitCode, stdout, stderr, overflow) {
+    var failed = overflow || exitCode !== 0
+    var wasAll = _readAll
+    var reading = _readingNotification
+    disarmActionWatchdog()
+    if (overflow) {
+      lastError = "Fizzy CLI output was too large"
+      actionStatus = lastError
+    } else if (exitCode !== 0) {
       lastError = conciseError(Model.friendlyCliError(stderr || stdout, "Could not mark the notification as read"))
       actionStatus = lastError
-    } else {
-      actionStatus = _readAll ? "Marked all as read" : "Marked as read"
+    } else if (!wasAll) {
+      actionStatus = "Marked as read"
     }
-    actionStatusTimer.restart()
+    if (!wasAll || failed || _readAllQueue.length === 0) actionStatusTimer.restart()
+    if (failed) {
+      _readAllQueue = []
+      if (wasAll) {
+        if (_notificationsBeforeAll) {
+          notifications = _notificationsBeforeAll
+          unreadCount = Model.unreadCount(notifications)
+        }
+        applyPeekItemReadState(undefined, _peekUnreadBeforeAll, _peekUnreadBeforeAll ? 1 : 0)
+      } else if (reading) restoreNotification(reading)
+    } else if (wasAll) markPeekItemRead()
+    else if (reading) markPeekItemRead(reading.id)
     _readingNotification = null
+    _readOutput = ""
+    _readError = ""
+    _readOverflow = false
+    if (failed) {
+      _readAll = false
+      _notificationsBeforeAll = null
+      if (_readQueue.length > 0) runNextRead()
+      else refreshAfterRead.restart()
+      return
+    }
+    if (wasAll && _readAllQueue.length > 0) {
+      runNextReadAll()
+      return
+    }
+    if (wasAll) {
+      actionStatus = "Marked all as read"
+      actionStatusTimer.restart()
+    }
     _readAll = false
+    _notificationsBeforeAll = null
     if (_readQueue.length > 0) runNextRead()
     else refreshAfterRead.restart()
   }
@@ -236,11 +905,59 @@ Item {
     repeat: false
     onTriggered: {
       if (!root.refreshing) return
-      if (whichProcess.running) whichProcess.running = false
-      if (identityProcess.running) identityProcess.running = false
-      if (listProcess.running) listProcess.running = false
-      if (root.setupKind === "") root.applyIdentityResult("", 127)
-      else root.refreshing = false
+      var wasReady = root._cliReady
+      var pathKnown = root._fizzyOnPath || wasReady
+      root.beginProbe()
+      root.stopProcess(whichProcess)
+      root.stopProcess(authListProcess)
+      root.stopProcess(identityProcess)
+      root.stopProcess(listProcess)
+      root.refreshing = false
+      root.lastError = "Timed out talking to Fizzy"
+      if (wasReady) {
+        root._cliReady = false
+        root._recoverWhich = true
+        root.tryRecoverWhich()
+        return
+      }
+      if (pathKnown) return
+      root.applyIdentityResult("", 127)
+    }
+  }
+
+  Timer {
+    id: peekWatchdog
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      var number = root._peekCardNumber
+      var pending = root._pendingPeekItem
+      root._pendingPeekItem = null
+      root.beginPeekGen()
+      root._peekAbandoned = true
+      root.stopProcess(cardShowProcess)
+      root.stopProcess(commentListProcess)
+      if (root.peek && root.peek.loading && root._peekCardNumber === number)
+        root.failedPeek("Timed out loading the card")
+      if (pending && root.panelOpen) {
+        root._pendingPeekItem = pending
+        root.tryStartPendingPeek()
+      }
+    }
+  }
+
+  Timer {
+    id: actionWatchdog
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      root.stopProcess(readProcess)
+      root.stopProcess(logoutProcess)
+      if (root.actionStatus.indexOf("Marking") === 0 || root.actionStatus.indexOf("Removing") === 0) {
+        root.lastError = "Timed out talking to Fizzy"
+        root.actionStatus = root.lastError
+        actionStatusTimer.restart()
+      }
     }
   }
 
@@ -249,14 +966,48 @@ Item {
     running: false
     command: []
     onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        root.applyIdentityResult("", exitCode)
+      if (!root.probeCurrent(root._whichGen)) {
+        root.tryRecoverWhich()
         return
       }
-      root._identityOutput = ""
-      root._identityError = ""
-      identityProcess.command = ["fizzy", "identity", "show", "--json"]
-      identityProcess.running = true
+      if (exitCode !== 0) {
+        root._fizzyOnPath = false
+        root.applyIdentityResult("", 127)
+        return
+      }
+      root._fizzyOnPath = true
+      root.startAuthList()
+    }
+  }
+
+  Process {
+    id: authListProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._authOutput = root.takeBounded(root._authOutput, chunk, authListProcess, function() { root._authOverflow = true })
+      }
+    }
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._authError = root.takeBounded(root._authError, chunk, authListProcess, function() { root._authOverflow = true })
+      }
+    }
+    onExited: function(exitCode) {
+      var stdout = root._authOutput
+      var stderr = root._authError
+      var overflow = root._authOverflow
+      root._authOutput = ""
+      root._authError = ""
+      root._authOverflow = false
+      if (!root.probeCurrent(root._authGen)) {
+        root.tryRecoverWhich()
+        return
+      }
+      root.applyAuthList(stdout || stderr, exitCode, overflow)
     }
   }
 
@@ -264,20 +1015,30 @@ Item {
     id: identityProcess
     running: false
     command: []
-    stdout: StdioCollector {
-      id: identityStdout
-      waitForEnd: true
-      onStreamFinished: root._identityOutput = text
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._identityOutput = root.takeBounded(root._identityOutput, chunk, identityProcess, function() { root._identityOverflow = true })
+      }
     }
-    stderr: StdioCollector {
-      id: identityStderr
-      waitForEnd: true
-      onStreamFinished: root._identityError = text
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._identityError = root.takeBounded(root._identityError, chunk, identityProcess, function() { root._identityOverflow = true })
+      }
     }
     onExited: function(exitCode) {
-      var stdout = String(identityStdout.text || root._identityOutput || "")
-      var stderr = String(identityStderr.text || root._identityError || "")
-      root.applyIdentityResult(stdout || stderr, exitCode)
+      var stdout = root._identityOutput
+      var stderr = root._identityError
+      var overflow = root._identityOverflow
+      root._identityOutput = ""
+      root._identityError = ""
+      root._identityOverflow = false
+      if (!root.probeCurrent(root._identityGen)) {
+        root.tryRecoverWhich()
+        return
+      }
+      root.applyProfileIdentity(stdout || stderr, exitCode, overflow)
     }
   }
 
@@ -285,34 +1046,30 @@ Item {
     id: listProcess
     running: false
     command: []
-    stdout: StdioCollector {
-      id: listStdout
-      waitForEnd: true
-      onStreamFinished: root._listOutput = text
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._listOutput = root.takeBounded(root._listOutput, chunk, listProcess, function() { root._listOverflow = true })
+      }
     }
-    stderr: StdioCollector {
-      id: listStderr
-      waitForEnd: true
-      onStreamFinished: root._listError = text
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._listError = root.takeBounded(root._listError, chunk, listProcess, function() { root._listOverflow = true })
+      }
     }
     onExited: function(exitCode) {
-      var stdout = String(listStdout.text || root._listOutput || "")
-      var stderr = String(listStderr.text || root._listError || "")
-      if (exitCode !== 0) {
-        root.lastError = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not list Fizzy notifications"))
-        root.refreshing = false
-        probeWatchdog.stop()
+      var stdout = root._listOutput
+      var stderr = root._listError
+      var overflow = root._listOverflow
+      root._listOutput = ""
+      root._listError = ""
+      root._listOverflow = false
+      if (!root.probeCurrent(root._listGen)) {
+        root.tryRecoverWhich()
         return
       }
-
-      var parsed = Model.parseNotifications(stdout, root.maxItems)
-      if (!parsed.ok) {
-        root.lastError = parsed.error
-        root.refreshing = false
-        probeWatchdog.stop()
-        return
-      }
-      root.finishRefresh(parsed.items)
+      root.applyProfileList(stdout || stderr, exitCode, overflow)
     }
   }
 
@@ -320,20 +1077,177 @@ Item {
     id: readProcess
     running: false
     command: []
-    stdout: StdioCollector {
-      id: readStdout
-      waitForEnd: true
-      onStreamFinished: root._readOutput = text
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._readOutput = root.takeBounded(root._readOutput, chunk, readProcess, function() { root._readOverflow = true })
+      }
     }
-    stderr: StdioCollector {
-      id: readStderr
-      waitForEnd: true
-      onStreamFinished: root._readError = text
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._readError = root.takeBounded(root._readError, chunk, readProcess, function() { root._readOverflow = true })
+      }
     }
     onExited: function(exitCode) {
-      var stdout = String(readStdout.text || root._readOutput || "")
-      var stderr = String(readStderr.text || root._readError || "")
-      root.finishRead(exitCode, stdout, stderr)
+      var stdout = root._readOutput
+      var stderr = root._readError
+      var overflow = root._readOverflow
+      root._readOutput = ""
+      root._readError = ""
+      root._readOverflow = false
+      root.finishRead(exitCode, stdout, stderr, overflow)
     }
   }
+
+  Process {
+    id: logoutProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._logoutOutput = root.takeBounded(root._logoutOutput, chunk, logoutProcess, function() { root._logoutOverflow = true })
+      }
+    }
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._logoutError = root.takeBounded(root._logoutError, chunk, logoutProcess, function() { root._logoutOverflow = true })
+      }
+    }
+    onExited: function(exitCode) {
+      var stdout = root._logoutOutput
+      var stderr = root._logoutError
+      var overflow = root._logoutOverflow
+      root._logoutOutput = ""
+      root._logoutError = ""
+      root._logoutOverflow = false
+      root.finishLogout(exitCode, stdout, stderr, overflow)
+    }
+  }
+
+  Process {
+    id: cardShowProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._cardShowOutput = root.takeBounded(root._cardShowOutput, chunk, cardShowProcess, function() { root._cardShowOverflow = true })
+      }
+    }
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._cardShowError = root.takeBounded(root._cardShowError, chunk, cardShowProcess, function() { root._cardShowOverflow = true })
+      }
+    }
+    onExited: function(exitCode) {
+      var stdout = root._cardShowOutput
+      var stderr = root._cardShowError
+      var overflow = root._cardShowOverflow
+      root._cardShowOutput = ""
+      root._cardShowError = ""
+      root._cardShowOverflow = false
+      root.notePeekExit()
+      if (!root.peekCurrent(root._cardShowGen)) {
+        root.tryStartPendingPeek()
+        return
+      }
+      if (!root.panelOpen) {
+        root._pendingPeekItem = null
+        return
+      }
+      if (root.tryStartPendingPeek()) return
+      if (root._peekCardNumber === 0) return
+      if (overflow) {
+        root.failedPeek("Fizzy CLI output was too large")
+        return
+      }
+      if (exitCode !== 0) {
+        root.failedPeek(Model.friendlyCliError(stderr || stdout, "Could not load the card"))
+        return
+      }
+      var parsed = Model.parseCard(stdout)
+      if (!parsed.ok) {
+        root.failedPeek(parsed.error)
+        return
+      }
+      root.peek = {
+        loading: true,
+        error: "",
+        card: parsed.card,
+        comments: [],
+        cardNumber: root._peekCardNumber,
+        title: parsed.card.title,
+        boardName: parsed.card.boardName
+      }
+      root._commentOutput = ""
+      root._commentError = ""
+      root._commentOverflow = false
+      root._commentGen = root._peekGen
+      root._peekLive += 1
+      commentListProcess.command = Model.fizzyArgs(["comment", "list", "--card", Model.safeCliToken(root._peekCardNumber), "--limit", String(Model.commentListLimit()), "--json"], root._peekProfile)
+      commentListProcess.running = true
+      peekWatchdog.restart()
+    }
+  }
+
+  Process {
+    id: commentListProcess
+    running: false
+    command: []
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._commentOutput = root.takeBounded(root._commentOutput, chunk, commentListProcess, function() { root._commentOverflow = true })
+      }
+    }
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root._commentError = root.takeBounded(root._commentError, chunk, commentListProcess, function() { root._commentOverflow = true })
+      }
+    }
+    onExited: function(exitCode) {
+      var stdout = root._commentOutput
+      var stderr = root._commentError
+      var overflow = root._commentOverflow
+      root._commentOutput = ""
+      root._commentError = ""
+      root._commentOverflow = false
+      root.notePeekExit()
+      if (!root.peekCurrent(root._commentGen)) {
+        root.tryStartPendingPeek()
+        return
+      }
+      if (!root.panelOpen) {
+        root._pendingPeekItem = null
+        return
+      }
+      if (root.tryStartPendingPeek()) return
+      if (root._peekCardNumber === 0) return
+      var card = root.peek && root.peek.card ? root.peek.card : null
+      var comments = []
+      var error = ""
+      if (overflow) error = "Fizzy CLI output was too large"
+      else if (exitCode !== 0) error = root.conciseError(Model.friendlyCliError(stderr || stdout, "Could not load comments"))
+      else {
+        var parsed = Model.parseComments(stdout, Model.commentListLimit())
+        if (!parsed.ok) error = parsed.error
+        else comments = parsed.items
+      }
+      root.cachePeek({
+        loading: false,
+        error: error,
+        card: card,
+        comments: comments,
+        cardNumber: root._peekCardNumber,
+        title: card && card.title ? card.title : (root.peek && root.peek.title ? root.peek.title : ""),
+        boardName: card && card.boardName ? card.boardName : (root.peek && root.peek.boardName ? root.peek.boardName : "")
+      })
+    }
+  }
+
 }

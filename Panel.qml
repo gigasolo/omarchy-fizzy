@@ -15,17 +15,62 @@ Panel {
 
   property int selectedIndex: 0
   property bool cursorActive: false
+  property bool peeking: false
+  property bool showingHelp: false
+  property bool showingAccounts: false
+  property bool addingAccount: false
+  property bool confirmingRemove: false
+  property int accountIndex: 0
+  property string addName: ""
+  property bool enterHandled: false
   property double nowMs: Date.now()
   property string stateFilter: "unread"
+  property string profileFilter: ""
+  readonly property var selectedItem: filteredNotifications.length > 0 ? filteredNotifications[selectedIndex] : null
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, stateFilter)
+  readonly property var filteredNotifications: Model.filterNotifications(service.notifications, stateFilter, profileFilter)
+  readonly property var accountRows: showingAccounts
+    ? Model.accountSwitcherRows(service.profiles, service.notifications, profileFilter)
+    : Model.emptyList()
+  readonly property bool overlayOpen: showingHelp || showingAccounts
+  readonly property bool showAccountMeta: service.profiles.length > 1 && profileFilter === ""
   readonly property bool needsSetup: service.setupKind !== ""
   readonly property var setupGuide: Model.setupGuide(service.setupKind)
   readonly property color barIconColor: service.unreadCount > 0 ? urgent : (service.authenticated ? barForeground : Qt.darker(barForeground, 1.55))
+  readonly property bool canMarkSelected: {
+    var item = peekTarget()
+    return !!(item && item.unread)
+  }
+  readonly property var shortcutHelp: {
+    if (!showingHelp) return Model.emptyList()
+    var rows = [
+      { keys: "j k", action: "Move" },
+      { keys: "Enter", action: "Open in browser" },
+      { keys: "Space", action: "Peek at the card" },
+      { keys: "c", action: "Copy card link" },
+      { keys: "a", action: "Send to agent" }
+    ]
+    if (canMarkSelected) rows = rows.concat([{ keys: "m", action: "Mark this as read" }])
+    if (Model.unreadCount(service.notifications, profileFilter) > 0)
+      rows = rows.concat([{ keys: "M", action: "Mark all as read" }])
+    if (!needsSetup) {
+      rows = rows.concat([
+        { keys: "1-9", action: "Switch account" },
+        { keys: "s", action: "Accounts" }
+      ])
+      if (service.profiles.length > 0) rows = rows.concat([{ keys: "[ ]", action: "Cycle account" }])
+    }
+    return rows.concat([
+      { keys: "h l", action: "New / older" },
+      { keys: "r", action: "Refresh" },
+      { keys: "?", action: "Show or hide shortcuts" },
+      { keys: "Esc", action: "Back / close" }
+    ])
+  }
 
   property int phraseIndex: 0
   readonly property var loadingPhrases: [
@@ -43,6 +88,8 @@ Panel {
     if (rotatingPhrases) return loadingPhrases[phraseIndex % loadingPhrases.length]
     if (!service.installed) return "CLI not installed"
     if (!service.authenticated) return "Sign in to Fizzy"
+    var names = Model.heroAccountText(service.profiles, profileFilter)
+    if (names !== "") return names
     if (service.accountName !== "") return service.accountName
     return "Fizzy.do"
   }
@@ -51,7 +98,7 @@ Panel {
     if (!service.installed) return "Install fizzy-cli, then run fizzy setup."
     if (!service.authenticated) return "Run fizzy setup to sign in."
     if (stateFilter === "unread") return "You're all caught up."
-    return "No previous notifications."
+    return "No older notifications."
   }
 
   property var themeColors: ({})
@@ -72,11 +119,43 @@ Panel {
   }
 
   function setStateFilter(value) {
+    showingHelp = false
+    closeAccounts()
+    peeking = false
+    service.closePeek()
     stateFilter = String(value || "unread")
     selectedIndex = 0
     cursorActive = false
     pointerGate.reset()
     if (panelFlick) panelFlick.contentY = 0
+  }
+
+  function setProfileFilter(value) {
+    if (root.needsSetup) return
+    var next = Model.safeCliToken(value)
+    showingHelp = false
+    peeking = false
+    service.closePeek()
+    if (next !== profileFilter) {
+      profileFilter = next
+      selectedIndex = 0
+      cursorActive = false
+      pointerGate.reset()
+      if (panelFlick) panelFlick.contentY = 0
+    }
+    closeAccounts()
+  }
+
+  function cycleProfileFilter(delta) {
+    if (overlayOpen || service.profiles.length < 1) return
+    setProfileFilter(Model.cycleProfileFilter(service.profiles, profileFilter, delta))
+  }
+
+  function cycleStateFilter(delta) {
+    if (root.needsSetup) return
+    var next = Number(delta) > 0 ? "previous" : "unread"
+    if (stateFilter === next) return
+    setStateFilter(next)
   }
 
   function ensureSelection() {
@@ -91,6 +170,7 @@ Panel {
     cursorActive = true
     selectedIndex = Math.max(0, Math.min(filteredNotifications.length - 1, index))
     scrollSelectionIntoView()
+    if (peeking && filteredNotifications[selectedIndex]) service.loadPeek(filteredNotifications[selectedIndex])
   }
 
   function moveSelection(delta) {
@@ -102,14 +182,196 @@ Panel {
     select(selectedIndex + delta)
   }
 
+  function peekTarget() {
+    if (peeking && service.peekItem) return service.peekItem
+    return selectedItem
+  }
+
+  function closeAccounts() {
+    showingAccounts = false
+    addingAccount = false
+    confirmingRemove = false
+    addName = ""
+  }
+
+  function selectedAccountIndex() {
+    var rows = accountRows
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && rows[i].selected && rows[i].kind !== "add") return i
+    }
+    return 0
+  }
+
+  function toggleAccounts() {
+    if (root.needsSetup) {
+      service.beginSetup()
+      return
+    }
+    if (showingAccounts) {
+      closeAccounts()
+      return
+    }
+    showingHelp = false
+    peeking = false
+    service.closePeek()
+    confirmingRemove = false
+    addingAccount = false
+    showingAccounts = true
+    accountIndex = selectedAccountIndex()
+  }
+
+  function moveAccountSelection(delta) {
+    if (!showingAccounts || addingAccount || confirmingRemove) return
+    var rows = accountRows
+    if (rows.length === 0) return
+    accountIndex = Math.max(0, Math.min(rows.length - 1, accountIndex + Number(delta)))
+  }
+
+  function activateAccountSelection() {
+    if (!showingAccounts) return
+    if (confirmingRemove) {
+      confirmRemoveAccount()
+      return
+    }
+    if (addingAccount) {
+      submitAddAccount()
+      return
+    }
+    var row = accountRows[accountIndex]
+    if (!row) return
+    if (row.kind === "add") {
+      startAddAccount()
+      return
+    }
+    setProfileFilter(row.profile)
+  }
+
+  function jumpAccountDigit(digit) {
+    if (showingHelp || addingAccount || confirmingRemove) return
+    if (root.needsSetup) return
+    var next = Model.profileForDigit(service.profiles, digit)
+    if (next === null) return
+    setProfileFilter(next)
+  }
+
+  function startAddAccount() {
+    if (!showingAccounts || confirmingRemove) return
+    confirmingRemove = false
+    addingAccount = true
+    addName = ""
+  }
+
+  function submitAddAccount() {
+    var token = Model.safeCliToken(addName)
+    if (token === "") return
+    if (!service.beginAddProfile(token)) return
+    addingAccount = false
+    addName = ""
+  }
+
+  function cancelAccountEdit() {
+    addingAccount = false
+    confirmingRemove = false
+    addName = ""
+  }
+
+  function startRemoveAccount() {
+    if (!showingAccounts || addingAccount) return
+    var row = accountRows[accountIndex]
+    if (!row || row.kind !== "profile") return
+    confirmingRemove = true
+  }
+
+  function confirmRemoveAccount() {
+    var row = accountRows[accountIndex]
+    if (!row || row.kind !== "profile") {
+      confirmingRemove = false
+      return
+    }
+    service.logoutProfile(row.profile)
+    confirmingRemove = false
+  }
+
   function activateSelection() {
+    if (showingAccounts) {
+      activateAccountSelection()
+      return
+    }
+    if (showingHelp) return
     if (root.needsSetup) {
       if (!cursorActive) return
       service.beginSetup()
       return
     }
-    if (!cursorActive || filteredNotifications.length === 0) return
-    service.openNotification(filteredNotifications[selectedIndex])
+    var item = peekTarget()
+    if (!item) return
+    if (!peeking && !cursorActive) return
+    service.openNotification(item)
+  }
+
+  function togglePeek() {
+    if (overlayOpen || root.needsSetup) return
+    if (peeking) {
+      peeking = false
+      service.closePeek()
+      return
+    }
+    if (!selectedItem) return
+    if (!cursorActive) select(selectedIndex)
+    peeking = true
+    service.loadPeek(selectedItem)
+  }
+
+  function closePeekOrPanel() {
+    if (addingAccount || confirmingRemove) {
+      cancelAccountEdit()
+      return
+    }
+    if (showingAccounts) {
+      closeAccounts()
+      return
+    }
+    if (showingHelp) {
+      showingHelp = false
+      return
+    }
+    if (peeking) {
+      peeking = false
+      service.closePeek()
+      return
+    }
+    root.close()
+  }
+
+  function copySelected() {
+    if (overlayOpen) return
+    var item = peekTarget()
+    if (!item) return
+    service.copyCardLink(item)
+  }
+
+  function sendSelectedToAgent() {
+    if (overlayOpen) return
+    var item = peekTarget()
+    if (!item) return
+    if (service.sendToAgent(item)) root.close()
+  }
+
+  function markSelectedRead() {
+    if (overlayOpen) return
+    var item = peekTarget()
+    if (!item) return
+    if (item.unread) service.markRead(item)
+  }
+
+  function markAllRead() {
+    if (overlayOpen || root.needsSetup) return
+    service.markAllRead(root.profileFilter)
+  }
+
+  function toggleHelp() {
+    if (showingAccounts) closeAccounts()
+    showingHelp = !showingHelp
   }
 
   function scrollSelectionIntoView() {
@@ -132,15 +394,35 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) {
-    cursorActive = false
-    nowMs = Date.now()
-    if (panelFlick) panelFlick.contentY = 0
-    service.refreshIfStale()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  onOpenedChanged: {
+    service.panelOpen = opened
+    if (opened) {
+      cursorActive = false
+      peeking = false
+      showingHelp = false
+      closeAccounts()
+      enterHandled = false
+      nowMs = Date.now()
+      if (panelFlick) panelFlick.contentY = 0
+      service.refreshIfStale()
+      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    } else {
+      peeking = false
+      showingHelp = false
+      closeAccounts()
+      service.closePeek()
+    }
   }
 
   onFilteredNotificationsChanged: ensureSelection()
+
+  Connections {
+    target: service
+    function onProfilesChanged() {
+      if (root.profileFilter !== "" && !Model.profileKnown(service.profiles, root.profileFilter))
+        root.profileFilter = ""
+    }
+  }
 
   PointerMoveGate {
     id: pointerGate
@@ -152,8 +434,13 @@ Panel {
     settings: root.settings
   }
 
+  // Repeater delegates shadow property names; these aliases keep the row
+  // from self-binding `service: service` / `pointerGate: pointerGate` to undefined.
+  readonly property var fizzyService: service
+  readonly property var rowPointerGate: pointerGate
+
   Timer {
-    interval: 30000
+    interval: 60000
     repeat: true
     running: root.opened
     onTriggered: root.nowMs = Date.now()
@@ -162,7 +449,7 @@ Panel {
   Timer {
     interval: 4000
     repeat: true
-    running: root.opened && root.needsSetup
+    running: root.opened && (root.needsSetup || service.awaitingProfile !== "")
     onTriggered: service.refresh()
   }
 
@@ -224,11 +511,13 @@ Panel {
     function unread(): int { return service.unreadCount }
     function status(): string {
       return JSON.stringify({
-        account: service.accountName,
+        account: Model.heroAccountText(service.profiles, root.profileFilter) || service.accountName,
         notifications: service.notifications.length,
         unread: service.unreadCount,
         visible: root.filteredNotifications.length,
         stateFilter: root.stateFilter,
+        profileFilter: root.profileFilter,
+        profiles: service.profiles.length,
         refreshing: service.refreshing,
         error: service.lastError,
         setup: service.setupKind
@@ -274,18 +563,44 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.addingAccount
       onMoveRequested: function(dx, dy) {
+        if (root.showingAccounts) {
+          if (dy !== 0) root.moveAccountSelection(dy)
+          return
+        }
         if (dy !== 0) root.moveSelection(dy)
+        else if (dx !== 0) root.cycleStateFilter(dx)
       }
-      onActivateRequested: root.activateSelection()
-      onCloseRequested: root.close()
+      onReturnRequested: {
+        root.enterHandled = true
+        root.activateSelection()
+      }
+      onActivateRequested: {
+        if (root.enterHandled) {
+          root.enterHandled = false
+          return
+        }
+        if (root.showingAccounts) root.activateAccountSelection()
+        else root.togglePeek()
+      }
+      onDeleteRequested: root.startRemoveAccount()
+      onCloseRequested: root.closePeekOrPanel()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
-        if (text === "r" || text === "R") service.refresh()
-        else if ((text === "s" || text === "S") && root.needsSetup) service.beginSetup()
-        else if (text === "u" || text === "U") root.setStateFilter("unread")
-        else if (text === "p" || text === "P") root.setStateFilter("previous")
-        else if (text === "m" || text === "M") service.markAllRead()
+        if (text >= "1" && text <= "9") root.jumpAccountDigit(text)
+        else if (text === "r" || text === "R") service.refresh()
+        else if (text === "s" || text === "S") root.toggleAccounts()
+        else if ((text === "n" || text === "N") && root.showingAccounts) root.startAddAccount()
+        else if ((text === "u" || text === "U") && !root.showingAccounts) root.setStateFilter("unread")
+        else if ((text === "p" || text === "P") && !root.showingAccounts) root.setStateFilter("previous")
+        else if (text === "m") root.markSelectedRead()
+        else if (text === "M") root.markAllRead()
+        else if (text === "c" || text === "C") root.copySelected()
+        else if (text === "a" || text === "A") root.sendSelectedToAgent()
+        else if (text === "?") root.toggleHelp()
+        else if (text === "[") root.cycleProfileFilter(-1)
+        else if (text === "]") root.cycleProfileFilter(1)
       }
 
       ColumnLayout {
@@ -300,7 +615,7 @@ Panel {
 
           Item {
             width: parent.width
-            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, refreshButton.implicitHeight)
+            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, accountsButton.implicitHeight, helpButton.implicitHeight, refreshButton.implicitHeight)
 
             FizzyIcon {
               id: heroIcon
@@ -314,7 +629,7 @@ Panel {
               id: heroLabels
               anchors.left: heroIcon.right
               anchors.leftMargin: Style.space(14)
-              anchors.right: refreshButton.left
+              anchors.right: accountsButton.visible ? accountsButton.left : helpButton.left
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(3)
@@ -325,6 +640,7 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
                 font.bold: true
+                textFormat: Text.PlainText
               }
 
               Text {
@@ -336,7 +652,33 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 elide: Text.ElideRight
+                textFormat: Text.PlainText
               }
+            }
+
+            PanelActionButton {
+              id: accountsButton
+              visible: !root.needsSetup
+              anchors.right: helpButton.left
+              anchors.rightMargin: Style.space(2)
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰀉"
+              tooltipText: "Accounts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleAccounts()
+            }
+
+            PanelActionButton {
+              id: helpButton
+              anchors.right: refreshButton.left
+              anchors.rightMargin: Style.space(2)
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "?"
+              tooltipText: "Shortcuts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.toggleHelp()
             }
 
             PanelActionButton {
@@ -373,7 +715,7 @@ Panel {
             }
 
             Button {
-              text: "PREVIOUS"
+              text: "OLDER"
               selected: root.stateFilter === "previous"
               foreground: root.foreground
               background: "transparent"
@@ -405,12 +747,14 @@ Panel {
             spacing: Style.space(12)
 
             SetupCard {
-              visible: root.needsSetup
+              visible: !root.overlayOpen && root.needsSetup
               width: parent.width
+              panel: root
+              service: service
             }
 
             Text {
-              visible: !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
+              visible: !root.overlayOpen && !root.peeking && !root.needsSetup && !service.refreshing && root.filteredNotifications.length === 0 && service.lastError === ""
               width: parent.width
               text: root.emptyMessage()
               color: root.dim
@@ -419,10 +763,11 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               topPadding: Style.space(16)
               bottomPadding: Style.space(18)
+              textFormat: Text.PlainText
             }
 
             Text {
-              visible: !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
+              visible: !root.overlayOpen && !root.peeking && !root.needsSetup && service.lastError !== "" && root.filteredNotifications.length === 0
               width: parent.width
               text: service.lastError
               color: root.urgent
@@ -432,219 +777,48 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               topPadding: Style.space(16)
               bottomPadding: Style.space(18)
+              textFormat: Text.PlainText
+            }
+
+            HelpView {
+              visible: root.showingHelp
+              width: parent.width
+              panel: root
+            }
+
+            AccountsView {
+              visible: root.showingAccounts
+              width: parent.width
+              panel: root
+              service: service
+            }
+
+            PeekView {
+              visible: !root.overlayOpen && root.peeking && !root.needsSetup
+              width: parent.width
+              panel: root
+              service: service
             }
 
             Column {
               id: notificationColumn
-              visible: !root.needsSetup && root.filteredNotifications.length > 0
+              visible: !root.overlayOpen && !root.peeking && !root.needsSetup && root.filteredNotifications.length > 0
               width: parent.width
               spacing: Style.space(8)
 
               Repeater {
                 model: root.filteredNotifications
 
-                CursorSurface {
-                  id: notificationRow
-                  required property var modelData
-                  required property int index
+                NotificationRow {
                   width: notificationColumn.width
-                  foreground: root.foreground
-                  hasCursor: root.cursorActive && root.selectedIndex === index
-                  implicitHeight: rowContent.implicitHeight + Style.space(16)
-
-                  MouseArea {
-                    id: rowMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onPositionChanged: function(mouse) {
-                      if (pointerGate.moved(notificationRow, mouse)) root.select(notificationRow.index)
-                    }
-                    onClicked: service.openNotification(notificationRow.modelData)
-                  }
-
-                  PanelToolTip {
-                    visible: rowMouse.containsMouse
-                    text: (notificationRow.modelData.sourceType || "Notification") + (notificationRow.modelData.unread ? " · Unread" : " · Read")
-                    fontFamily: root.fontFamily
-                  }
-
-                  RowLayout {
-                    id: rowContent
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: Style.space(10)
-                    anchors.rightMargin: Style.space(10)
-                    spacing: Style.space(9)
-
-                    Rectangle {
-                      Layout.preferredWidth: Style.space(24)
-                      Layout.preferredHeight: Style.space(24)
-                      Layout.alignment: Qt.AlignTop
-                      radius: width / 2
-                      color: root.typeColor(notificationRow.modelData.sourceType)
-
-                      TextMetrics {
-                        id: glyphMetrics
-                        font.family: root.fontFamily
-                        font.pixelSize: Math.round(Style.font.icon)
-                        text: Model.notificationTypeIcon(notificationRow.modelData.sourceType)
-                      }
-
-                      Text {
-                        id: glyphText
-                        anchors.centerIn: parent
-                        anchors.horizontalCenterOffset: glyphText.implicitWidth / 2 - (glyphMetrics.tightBoundingRect.x + glyphMetrics.tightBoundingRect.width / 2)
-                        anchors.verticalCenterOffset: glyphText.implicitHeight / 2 - (glyphText.baselineOffset + glyphMetrics.tightBoundingRect.y + glyphMetrics.tightBoundingRect.height / 2)
-                        text: glyphMetrics.text
-                        color: Color.popups.background
-                        font.family: root.fontFamily
-                        font.pixelSize: glyphMetrics.font.pixelSize
-                        renderType: Text.NativeRendering
-                      }
-                    }
-
-                    ColumnLayout {
-                      Layout.fillWidth: true
-                      spacing: Style.space(2)
-
-                      Text {
-                        Layout.fillWidth: true
-                        text: notificationRow.modelData.title
-                        color: root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.body
-                        font.weight: notificationRow.modelData.unread ? Font.DemiBold : Font.Normal
-                        elide: Text.ElideRight
-                      }
-
-                      Text {
-                        visible: notificationRow.modelData.excerpt !== ""
-                        Layout.fillWidth: true
-                        text: notificationRow.modelData.excerpt
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        maximumLineCount: 2
-                        wrapMode: Text.Wrap
-                        elide: Text.ElideRight
-                      }
-
-                      Text {
-                        Layout.fillWidth: true
-                        text: Model.notificationMeta(notificationRow.modelData, root.nowMs)
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                      }
-                    }
-
-                    Rectangle {
-                      visible: notificationRow.modelData.unread
-                      Layout.alignment: Qt.AlignTop
-                      Layout.topMargin: Style.space(2)
-                      Layout.preferredHeight: Style.space(16)
-                      Layout.preferredWidth: Math.max(Style.space(16), rowBadgeText.implicitWidth + Style.space(8))
-                      radius: Style.space(8)
-                      color: root.urgent
-
-                      Text {
-                        id: rowBadgeText
-                        anchors.centerIn: parent
-                        text: String(Math.max(1, notificationRow.modelData.unreadCount || 0))
-                        color: Color.background
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                      }
-                    }
-                  }
+                  panel: root
+                  service: root.fizzyService
+                  pointerGate: root.rowPointerGate
                 }
               }
             }
           }
         }
-      }
-    }
-  }
-
-  component SetupCard: CursorSurface {
-    id: setupCard
-
-    hasCursor: root.cursorActive && root.needsSetup
-    foreground: root.foreground
-
-    implicitHeight: setupRow.implicitHeight + Style.spacing.rowPaddingX
-
-    MouseArea {
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onEntered: root.cursorActive = true
-      onClicked: service.beginSetup()
-    }
-
-    RowLayout {
-      id: setupRow
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.verticalCenter: parent.verticalCenter
-      anchors.leftMargin: Style.space(10)
-      anchors.rightMargin: Style.space(10)
-      spacing: Style.space(8)
-
-      Text {
-        text: root.setupGuide.kind === "missing_cli" ? "󰏖" : "󰌆"
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.heading
-        Layout.alignment: Qt.AlignTop
-        Layout.topMargin: Style.space(2)
-      }
-
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: Style.space(4)
-
-        Text {
-          Layout.fillWidth: true
-          text: root.setupGuide.title
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          font.weight: Font.DemiBold
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          Layout.fillWidth: true
-          text: root.setupGuide.detail
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          Layout.fillWidth: true
-          text: root.setupGuide.commands.map(function(command) { return "$ " + command }).join("\n")
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-          topPadding: Style.space(2)
-        }
-      }
-
-      PanelActionButton {
-        iconText: "󰌋"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        tooltipText: root.setupGuide.action
-        Layout.alignment: Qt.AlignVCenter
-        onClicked: service.beginSetup()
       }
     }
   }

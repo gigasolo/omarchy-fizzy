@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "gigasolo.fizzy",
   "name": "Fizzy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "GigaSolo LLC",
   "license": "MIT",
   "homepage": "https://github.com/gigasolo/omarchy-fizzy",
-  "description": "Unread Fizzy.do notifications in the Omarchy bar.",
+  "description": "Unread Fizzy notifications in the Omarchy bar. Peek, copy, send to your agent, mark read.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Fizzy",
-    "description": "Unread Fizzy notifications with a keyboard-driven tray.",
+    "description": "Unread Fizzy notifications with peek, copy, send-to-agent, and keyboard shortcuts.",
     "category": "Productivity",
     "aliases": [
       "fizzy",
